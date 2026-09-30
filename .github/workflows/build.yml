@@ -1,14 +1,14 @@
-name: Build Android APK
+name: Build Kameko Android APK
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch: # Allows you to trigger the build manually
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build APK
+    name: Build Standalone APK
     runs-on: ubuntu-latest
 
     steps:
@@ -23,8 +23,20 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Generate Android folder (Expo Prebuild)
+      - name: Generate Android project
         run: npx expo prebuild --platform android --clean
+
+      - name: Create assets directory
+        run: mkdir -p android/app/src/main/assets
+
+      - name: Bundle JavaScript code offline
+        run: |
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file node_modules/expo/AppEntry.js \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/res/
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -36,12 +48,12 @@ jobs:
         working-directory: android
         run: chmod +x gradlew
 
-      - name: Build Android APK
+      - name: Build Android APK with embedded bundle
         working-directory: android
         run: ./gradlew assembleDebug
 
       - name: Upload APK as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kameko-app-apk
+          name: kameko-working-app
           path: android/app/build/outputs/apk/debug/app-debug.apk
