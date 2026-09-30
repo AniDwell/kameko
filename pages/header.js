@@ -1,14 +1,10 @@
 import React from 'react';
-import { View, Image, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 
 export default function Header() {
   return (
     <View style={styles.headerContainer}>
-      <Image 
-        source={require('../assets/header.png')} 
-        style={styles.headerImage}
-        resizeMode="contain"
-      />
+      <Text style={styles.headerText}>KAMEKO</Text>
     </View>
   );
 }
@@ -21,10 +17,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#000000',
     borderBottomWidth: 1,
-    borderBottomColor: '#ff0000', // Red accent line
+    borderBottomColor: '#ff0000',
   },
-  headerImage: {
-    width: '60%', 
-    height: 40,
+  headerText: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: 'bold',
+    letterSpacing: 2,
   }
 });
