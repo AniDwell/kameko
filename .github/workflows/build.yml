@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    name: Build Standalone APK
+    name: Build Standalone Release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -26,18 +26,6 @@ jobs:
       - name: Generate Android project
         run: npx expo prebuild --platform android --clean
 
-      - name: Create assets directory
-        run: mkdir -p android/app/src/main/assets
-
-      - name: Bundle JavaScript code offline
-        run: |
-          npx react-native bundle \
-            --platform android \
-            --dev false \
-            --entry-file node_modules/expo/AppEntry.js \
-            --bundle-output android/app/src/main/assets/index.android.bundle \
-            --assets-dest android/app/src/main/res/
-
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -48,12 +36,12 @@ jobs:
         working-directory: android
         run: chmod +x gradlew
 
-      - name: Build Android APK with embedded bundle
+      - name: Build Android Release APK (Auto-bundles JS)
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleRelease
 
       - name: Upload APK as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: kameko-working-app
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
