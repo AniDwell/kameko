@@ -36,16 +36,16 @@ jobs:
         working-directory: android
         run: chmod +x gradlew
 
-      - name: Build Android Release APK
+      - name: Build Android Release APK (Signed with Debug Keystore)
         working-directory: android
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=1024m"
-        # The 'clean' command wipes the Gradle cache to prevent lingering AAPT errors
-        run: ./gradlew clean assembleRelease --stacktrace
+        # assembleRelease with signingConfig forces Gradle to sign the APK so Android allows installation
+        run: ./gradlew assembleRelease -Pandroid.injected.signing.store.file=$HOME/.android/debug.keystore -Pandroid.injected.signing.store.password=android -Pandroid.injected.signing.key.alias=androiddebugkey -Pandroid.injected.signing.key.password=android --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kameko-app
+          name: kameko-installable-app
           path: android/app/build/outputs/apk/**/*.apk
