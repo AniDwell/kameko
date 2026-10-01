@@ -4,16 +4,11 @@
     "slug": "kameko",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/logo.png",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/logo.png",
-        "backgroundColor": "#000000"
-      },
       "package": "com.yourname.kameko"
     }
   }
