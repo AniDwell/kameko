@@ -1,19 +1,15 @@
-import React from 'react';
-import { SafeAreaView, StatusBar, StyleSheet } from 'react-native';
-import Home from './pages/home';
-
-export default function App() {
-  return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
-      <Home />
-    </SafeAreaView>
-  );
+{
+  "expo": {
+    "name": "kameko",
+    "slug": "kameko",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.yourname.kameko"
+    }
+  }
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-});
