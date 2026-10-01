@@ -3,18 +3,19 @@ import { SafeAreaView, StatusBar, StyleSheet, ActivityIndicator, View } from 're
 import auth from '@react-native-firebase/auth';
 
 import Login from './pages/login';
-import Profiles from './pages/profiles';
+// FIXED: Changed from './pages/profiles' to './pages/profile'
+import Profiles from './pages/profile'; 
 import Home from './pages/home';
 
 export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
-  const [activeProfile, setActiveProfile] = useState(null); // Tracks the chosen profile
+  const [activeProfile, setActiveProfile] = useState(null);
 
   useEffect(() => {
     const subscriber = auth().onAuthStateChanged((currentUser) => {
       setUser(currentUser);
-      if (!currentUser) setActiveProfile(null); // Clear profile if logged out
+      if (!currentUser) setActiveProfile(null);
       if (initializing) setInitializing(false);
     });
     return subscriber;
