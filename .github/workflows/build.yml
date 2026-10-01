@@ -32,25 +32,19 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Generate Keystore for Signing
-        # This creates the missing keystore file so the cloud server can sign the APK
-        run: |
-          mkdir -p $HOME/.android
-          keytool -genkey -v -keystore $HOME/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-
       - name: Grant execute permission for Gradle
         working-directory: android
         run: chmod +x gradlew
 
-      - name: Build Android Release APK
+      - name: Build Android Release APK (Unsigned)
         working-directory: android
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=1024m"
-        run: ./gradlew clean assembleRelease -Pandroid.injected.signing.store.file=$HOME/.android/debug.keystore -Pandroid.injected.signing.store.password=android -Pandroid.injected.signing.key.alias=androiddebugkey -Pandroid.injected.signing.key.password=android --stacktrace
+        run: ./gradlew assembleRelease --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: kameko-installable-app
-          path: android/app/build/outputs/apk/**/*.apk
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
