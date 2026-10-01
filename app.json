@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "kameko",
+    "slug": "kameko",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#000000",
+    "android": {
+      "package": "com.kameko.app"
+    }
+  }
+}
