@@ -19,11 +19,12 @@ export default function Carousel({ user }) {
   const [loading, setLoading] = useState(true);
   const [librarySet, setLibrarySet] = useState(new Set());
 
+  // Animations
   const fadeAnims = useRef([]).current;
   const scaleAnims = useRef([]).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
 
-  // 1. Loading Bar Animation
+  // 1. Loading Bar Animation (Login Screen Style)
   useEffect(() => {
     if (loading) {
       progressAnim.setValue(0);
@@ -58,7 +59,7 @@ export default function Carousel({ user }) {
     return () => unsubscribe();
   }, [user]);
 
-  // 3. Fetch AniList -> VERIFY WITH VERCEL API -> TMDB
+  // 3. Fetch AniList -> Verify with Vercel API -> TMDB Enrichment + Instant Cache Prefetch
   useEffect(() => {
     const fetchCarouselData = async () => {
       try {
@@ -99,7 +100,7 @@ export default function Carousel({ user }) {
           let finalEpisodes = anime.episodes || 0;
 
           try {
-            // STRICT VERIFICATION: Must exist in Vercel API
+            // STRICT VERIFICATION: Query Vercel API
             const vercelRes = await fetch(`https://anikoto-api-lyart.vercel.app/api/search?keyword=${encodeURIComponent(titleEng)}`);
             if (!vercelRes.ok) return null;
             
@@ -111,7 +112,6 @@ export default function Carousel({ user }) {
               return rTitle === titleEng.toLowerCase() || rTitle === titleRom.toLowerCase();
             }) || apiResults[0];
 
-            // IF NOT FOUND IN API, DROP ENTIRELY
             if (!exactMatch) return null;
 
             streamId = exactMatch.id;
@@ -145,12 +145,11 @@ export default function Carousel({ user }) {
               }
             }
           } catch (e) {
-            console.log('Carousel Enrichment error:', e);
-            return null; // Drop on error
+            return null;
           }
 
           return {
-            id: streamId, // Verified Vercel ID
+            id: streamId,
             title: titleEng,
             description: anime.description?.replace(/<[^>]*>?/gm, '').trim() || 'No synopsis available.',
             score: anime.averageScore,
@@ -165,9 +164,14 @@ export default function Carousel({ user }) {
           };
         }));
 
-        // Filter out nulls (unverified anime) and take the top 7
         const validSlides = enrichedSlides.filter(s => s !== null).slice(0, 7);
-        
+
+        // INSTANT CACHE WARMING: Prefetch all backdrops & logos into memory
+        validSlides.forEach((s) => {
+          if (s.backdrop) Image.prefetch(s.backdrop).catch(() => {});
+          if (s.logo) Image.prefetch(s.logo).catch(() => {});
+        });
+
         validSlides.forEach((_, i) => {
           fadeAnims[i] = new Animated.Value(i === 0 ? 1 : 0);
           scaleAnims[i] = new Animated.Value(i === 0 ? 1.05 : 1);
@@ -205,7 +209,6 @@ export default function Carousel({ user }) {
   };
 
   const handleNavigateToPlay = (animeData) => {
-    // Pass the exact structure play.js expects
     navigation.navigate('Play', { 
       anime: {
         id: animeData.id,
@@ -246,84 +249,114 @@ export default function Carousel({ user }) {
 
   return (
     <View style={styles.container}>
-      {slides.map((slide, i) => (
-        <Animated.View key={slide.id} style={[styles.slideWrapper, { opacity: fadeAnims[i], zIndex: currentIndex === i ? 2 : 1 }]}>
-          
-          <TouchableOpacity 
-            style={StyleSheet.absoluteFillObject} 
-            activeOpacity={0.9} 
-            onPress={() => handleNavigateToPlay(slide)}
+      
+      {/* LAYER 1: BACKDROP IMAGES CROSS-FADING */}
+      <View style={StyleSheet.absoluteFillObject}>
+        {slides.map((slide, i) => (
+          <Animated.View 
+            key={slide.id} 
+            style={[styles.slideWrapper, { opacity: fadeAnims[i], zIndex: currentIndex === i ? 2 : 1 }]}
           >
-            <Animated.Image source={{ uri: slide.backdrop }} style={[styles.backdrop, { transform: [{ scale: scaleAnims[i] }] }]} resizeMode="cover" />
+            <Animated.Image 
+              source={{ uri: slide.backdrop }} 
+              style={[styles.backdrop, { transform: [{ scale: scaleAnims[i] }] }]} 
+              resizeMode="cover"
+              fadeDuration={0} // Disables Android's 300ms fade delay for instant rendering
+            />
+          </Animated.View>
+        ))}
+      </View>
 
-            <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
-              <Defs>
-                <LinearGradient id="heroGradient" x1="0" y1="1" x2="0" y2="0">
-                  <Stop offset="0" stopColor="#000000" stopOpacity="1" />
-                  <Stop offset="0.35" stopColor="#000000" stopOpacity="0.9" />
-                  <Stop offset="0.65" stopColor="#000000" stopOpacity="0.5" />
-                  <Stop offset="1" stopColor="#000000" stopOpacity="0.1" />
-                </LinearGradient>
-              </Defs>
-              <Rect width="100%" height="100%" fill="url(#heroGradient)" />
-            </Svg>
+      {/* LAYER 2: PERMANENT DARK GRADIENT (NEVER FADES OR BLINKS) */}
+      <Svg height="100%" width="100%" style={styles.permanentGradient} pointerEvents="none">
+        <Defs>
+          <LinearGradient id="heroGradient" x1="0" y1="1" x2="0" y2="0">
+            <Stop offset="0" stopColor="#000000" stopOpacity="1" />
+            <Stop offset="0.32" stopColor="#000000" stopOpacity="0.9" />
+            <Stop offset="0.65" stopColor="#000000" stopOpacity="0.5" />
+            <Stop offset="1" stopColor="#000000" stopOpacity="0.08" />
+          </LinearGradient>
+        </Defs>
+        <Rect width="100%" height="100%" fill="url(#heroGradient)" />
+      </Svg>
 
-            <View style={styles.uiContainer}>
-              <View style={styles.titleAndCoverRow}>
-                <View style={styles.logoAndTextColumn}>
-                  {slide.logo ? (
-                    <View style={styles.logoShadowWrapper}>
-                      <Image source={{ uri: slide.logo }} style={styles.titleLogo} resizeMode="contain" />
-                    </View>
-                  ) : (
-                    <Text style={styles.titleText}>{slide.title}</Text>
-                  )}
+      {/* LAYER 3: CLICKABLE SURFACE FOR PLAY PAGE NAVIGATION */}
+      <TouchableOpacity 
+        style={StyleSheet.absoluteFillObject} 
+        activeOpacity={1} 
+        onPress={() => handleNavigateToPlay(slides[currentIndex])}
+      />
 
-                  <View style={styles.metaRow}>
-                    <View style={styles.trendingBadge}><Text style={styles.trendingBadgeText}>TOP #{i + 1}</Text></View>
-                    <View style={styles.ratingBadge}><Text style={styles.ratingText}>{slide.contentRating}</Text></View>
-                    {slide.score && <Text style={styles.scoreText}>★ {slide.score}%</Text>}
-                    {slide.episodes ? <Text style={styles.metaText}>{slide.episodes} EPS</Text> : null}
-                  </View>
-
-                  <View style={styles.genreRow}>
-                    {slide.genres.map((g, idx) => (
-                      <View key={idx} style={styles.genrePill}><Text style={styles.genreText}>{g}</Text></View>
-                    ))}
-                  </View>
-                </View>
-
-                <View style={styles.coverWrapper}>
-                  <Image source={{ uri: slide.coverImage }} style={styles.coverThumbnail} resizeMode="cover" />
-                </View>
+      {/* LAYER 4: FOREGROUND UI CONTENT */}
+      {slides.map((slide, i) => (
+        <Animated.View 
+          key={`ui-${slide.id}`} 
+          pointerEvents={currentIndex === i ? 'box-none' : 'none'}
+          style={[styles.uiContainer, { opacity: fadeAnims[i], zIndex: currentIndex === i ? 10 : 0 }]}
+        >
+          {/* Title Art / Logo (Full-width prominence, no cover thumbnail) */}
+          <View style={styles.titleWrapper}>
+            {slide.logo ? (
+              <View style={styles.logoShadowWrapper}>
+                <Image 
+                  source={{ uri: slide.logo }} 
+                  style={styles.titleLogo} 
+                  resizeMode="contain" 
+                  fadeDuration={0}
+                />
               </View>
+            ) : (
+              <Text style={styles.titleText}>{slide.title}</Text>
+            )}
 
-              <Text style={styles.descriptionText} numberOfLines={3}>{slide.description}</Text>
-
-              <View style={styles.buttonRow}>
-                <TouchableOpacity style={styles.playButton} activeOpacity={0.8} onPress={() => handleNavigateToPlay(slide)}>
-                  <Text style={styles.playButtonText}>▶ Play</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={[styles.libButton, librarySet.has(slide.id) && styles.libButtonActive]}
-                  onPress={() => toggleLibrary(slide)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.libButtonText, librarySet.has(slide.id) && styles.libTextActive]}>
-                    {librarySet.has(slide.id) ? '✓ In My List' : '+ My List'}
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.iconButton} onPress={() => Share.share({ message: `Watch ${slide.title} on Kameko!` })} activeOpacity={0.8}>
-                  <Text style={styles.iconButtonText}>➦</Text>
-                </TouchableOpacity>
-              </View>
+            <View style={styles.metaRow}>
+              <View style={styles.trendingBadge}><Text style={styles.trendingBadgeText}>TOP #{i + 1}</Text></View>
+              <View style={styles.ratingBadge}><Text style={styles.ratingText}>{slide.contentRating}</Text></View>
+              {slide.score && <Text style={styles.scoreText}>★ {slide.score}%</Text>}
+              {slide.episodes ? <Text style={styles.metaText}>{slide.episodes} EPS</Text> : null}
             </View>
-          </TouchableOpacity>
+
+            <View style={styles.genreRow}>
+              {slide.genres.map((g, idx) => (
+                <View key={idx} style={styles.genrePill}><Text style={styles.genreText}>{g}</Text></View>
+              ))}
+            </View>
+          </View>
+
+          <Text style={styles.descriptionText} numberOfLines={3}>{slide.description}</Text>
+
+          {/* Action Buttons */}
+          <View style={styles.buttonRow}>
+            <TouchableOpacity 
+              style={styles.playButton} 
+              activeOpacity={0.8} 
+              onPress={() => handleNavigateToPlay(slide)}
+            >
+              <Text style={styles.playButtonText}>▶ Play</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.libButton, librarySet.has(slide.id) && styles.libButtonActive]}
+              onPress={() => toggleLibrary(slide)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.libButtonText, librarySet.has(slide.id) && styles.libTextActive]}>
+                {librarySet.has(slide.id) ? '✓ In My List' : '+ My List'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.iconButton} 
+              onPress={() => Share.share({ message: `Watch ${slide.title} on Kameko!` })} 
+              activeOpacity={0.8}
+            >
+              <Text style={styles.iconButtonText}>➦</Text>
+            </TouchableOpacity>
+          </View>
         </Animated.View>
       ))}
 
+      {/* LAYER 5: PAGINATION DOTS */}
       <View style={styles.paginationContainer}>
         {slides.map((_, i) => (
           <TouchableOpacity 
@@ -348,14 +381,12 @@ const styles = StyleSheet.create({
   progressBarFill: { height: '100%', backgroundColor: BRAND_RED },
   slideWrapper: { ...StyleSheet.absoluteFillObject },
   backdrop: { width: '100%', height: '100%' },
-  uiContainer: { position: 'absolute', bottom: 25, left: 18, right: 25, zIndex: 10 },
-  titleAndCoverRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 12 },
-  logoAndTextColumn: { flex: 1, marginRight: 15 },
+  permanentGradient: { ...StyleSheet.absoluteFillObject, zIndex: 3 },
+  uiContainer: { position: 'absolute', bottom: 25, left: 18, right: 35 },
+  titleWrapper: { marginBottom: 12 },
   logoShadowWrapper: { shadowColor: '#000000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.95, shadowRadius: 8, elevation: 10, marginBottom: 10 },
-  titleLogo: { width: 210, height: 75, alignSelf: 'flex-start' },
-  titleText: { color: '#ffffff', fontSize: 28, fontWeight: '900', marginBottom: 8, textShadowColor: 'rgba(0,0,0,0.9)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
-  coverWrapper: { width: 72, height: 104, borderRadius: 8, overflow: 'hidden', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.2)', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.8, shadowRadius: 6, elevation: 8, marginBottom: 6 },
-  coverThumbnail: { width: '100%', height: '100%' },
+  titleLogo: { width: 230, height: 80, alignSelf: 'flex-start' },
+  titleText: { color: '#ffffff', fontSize: 30, fontWeight: '900', marginBottom: 8, textShadowColor: 'rgba(0,0,0,0.9)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   trendingBadge: { backgroundColor: BRAND_RED, paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 4 },
   trendingBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
