@@ -32,19 +32,34 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # 1. RETRIEVE THE EXACT SAME KEYSTORE WE USED FOR THE SHA-1
+      - name: Cache Keystore
+        uses: actions/cache@v4
+        id: keystore-cache
+        with:
+          path: ~/.android/debug.keystore
+          key: kameko-permanent-keystore
+
+      - name: Generate Keystore for Signing
+        if: steps.keystore-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.android
+          keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
       - name: Grant execute permission for Gradle
         working-directory: android
         run: chmod +x gradlew
 
-      - name: Build Android Release APK (Unsigned)
+      # 2. INJECT THE KEYSTORE TO CREATE A FULLY SIGNED RELEASE APK
+      - name: Build Android Release APK
         working-directory: android
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=1024m"
-        run: ./gradlew assembleRelease --stacktrace
+        run: ./gradlew clean assembleRelease -Pandroid.injected.signing.store.file=$HOME/.android/debug.keystore -Pandroid.injected.signing.store.password=android -Pandroid.injected.signing.key.alias=androiddebugkey -Pandroid.injected.signing.key.password=android --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: kameko-installable-app
-          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: android/app/build/outputs/apk/**/*.apk
