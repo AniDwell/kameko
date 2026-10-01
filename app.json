@@ -7,6 +7,8 @@
     "icon": "./assets/Kameko_logo.png",
     "userInterfaceStyle": "dark",
     "splash": {
+      "image": "./assets/kameko_header.png",
+      "resizeMode": "contain",
       "backgroundColor": "#000000"
     },
     "android": {
