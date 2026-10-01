@@ -4,11 +4,16 @@
     "slug": "kameko",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/kameko_logo.png",
     "userInterfaceStyle": "dark",
     "splash": {
       "backgroundColor": "#000000"
     },
     "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/kameko_logo.png",
+        "backgroundColor": "#000000"
+      },
       "package": "com.kameko.app"
     }
   }
