@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
-import { useNavigation } from '@react-navigation/native'; // Ensure navigation works
+import { useNavigation } from '@react-navigation/native';
 
 const { width } = Dimensions.get('window');
 const HEIGHT = 520;
@@ -19,12 +19,11 @@ export default function Carousel({ user }) {
   const [loading, setLoading] = useState(true);
   const [librarySet, setLibrarySet] = useState(new Set());
 
-  // Animations
   const fadeAnims = useRef([]).current;
   const scaleAnims = useRef([]).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
 
-  // 1. Loading Bar Animation (Login Screen Style)
+  // 1. Loading Bar Animation
   useEffect(() => {
     if (loading) {
       progressAnim.setValue(0);
@@ -59,13 +58,13 @@ export default function Carousel({ user }) {
     return () => unsubscribe();
   }, [user]);
 
-  // 3. Fetch AniList + Vercel API + TMDB
+  // 3. Fetch AniList -> VERIFY WITH VERCEL API -> TMDB
   useEffect(() => {
     const fetchCarouselData = async () => {
       try {
         const aniQuery = `
           query { 
-            Page(page: 1, perPage: 7) { 
+            Page(page: 1, perPage: 15) { 
               media(type: ANIME, sort: TRENDING_DESC, isAdult: false) { 
                 id
                 title { romaji english }
@@ -74,6 +73,7 @@ export default function Carousel({ user }) {
                 genres
                 format
                 episodes
+                status
                 coverImage { extraLarge large }
                 bannerImage
               } 
@@ -95,32 +95,30 @@ export default function Carousel({ user }) {
           let backdrop = anime.bannerImage || anime.coverImage?.extraLarge;
           let logo = null;
           let contentRating = 'U/A 13+';
-          let streamId = String(anime.id);
+          let streamId = null;
           let finalEpisodes = anime.episodes || 0;
 
-          // Parallel Fetch: Vercel API (for exact streaming ID) & TMDB (for art)
           try {
-            const [vercelRes, tmdbRes] = await Promise.all([
-              fetch(`https://anikoto-api-lyart.vercel.app/api/search?keyword=${encodeURIComponent(titleEng)}`).catch(() => null),
-              fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(titleEng)}`).catch(() => null)
-            ]);
+            // STRICT VERIFICATION: Must exist in Vercel API
+            const vercelRes = await fetch(`https://anikoto-api-lyart.vercel.app/api/search?keyword=${encodeURIComponent(titleEng)}`);
+            if (!vercelRes.ok) return null;
+            
+            const vercelData = await vercelRes.json();
+            const apiResults = vercelData.data || vercelData.results || vercelData || [];
+            
+            const exactMatch = apiResults.find(r => {
+              const rTitle = (r.title || '').toLowerCase();
+              return rTitle === titleEng.toLowerCase() || rTitle === titleRom.toLowerCase();
+            }) || apiResults[0];
 
-            // Process Vercel API Data
-            if (vercelRes && vercelRes.ok) {
-              const vercelData = await vercelRes.json();
-              const apiResults = vercelData.data || vercelData.results || vercelData || [];
-              const exactMatch = apiResults.find(r => {
-                const rTitle = (r.title || '').toLowerCase();
-                return rTitle === titleEng.toLowerCase() || rTitle === titleRom.toLowerCase();
-              }) || apiResults[0];
+            // IF NOT FOUND IN API, DROP ENTIRELY
+            if (!exactMatch) return null;
 
-              if (exactMatch) {
-                streamId = exactMatch.id;
-                finalEpisodes = exactMatch.episodes?.sub || exactMatch.episodes?.dub || exactMatch.episodeCount || exactMatch.episodes || finalEpisodes;
-              }
-            }
+            streamId = exactMatch.id;
+            finalEpisodes = exactMatch.episodes?.sub || exactMatch.episodes?.dub || exactMatch.episodeCount || exactMatch.episodes || finalEpisodes;
 
-            // Process TMDB Data
+            // Fetch TMDB Art
+            const tmdbRes = await fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(titleEng)}`).catch(() => null);
             if (tmdbRes && tmdbRes.ok) {
               const tmdbData = await tmdbRes.json();
               const tmdbMatch = tmdbData.results?.[0];
@@ -147,17 +145,19 @@ export default function Carousel({ user }) {
               }
             }
           } catch (e) {
-            console.log('Enrichment error:', e);
+            console.log('Carousel Enrichment error:', e);
+            return null; // Drop on error
           }
 
           return {
-            id: streamId, // Vercel streaming ID used for routing to Play.js
+            id: streamId, // Verified Vercel ID
             title: titleEng,
             description: anime.description?.replace(/<[^>]*>?/gm, '').trim() || 'No synopsis available.',
             score: anime.averageScore,
             genres: anime.genres?.slice(0, 3) || ['Action', 'Anime'],
             format: anime.format || 'TV',
             episodes: finalEpisodes,
+            status: anime.status,
             coverImage: anime.coverImage?.extraLarge || anime.coverImage?.large,
             backdrop,
             logo,
@@ -165,7 +165,9 @@ export default function Carousel({ user }) {
           };
         }));
 
-        const validSlides = enrichedSlides.filter(s => s !== null);
+        // Filter out nulls (unverified anime) and take the top 7
+        const validSlides = enrichedSlides.filter(s => s !== null).slice(0, 7);
+        
         validSlides.forEach((_, i) => {
           fadeAnims[i] = new Animated.Value(i === 0 ? 1 : 0);
           scaleAnims[i] = new Animated.Value(i === 0 ? 1.05 : 1);
@@ -203,7 +205,20 @@ export default function Carousel({ user }) {
   };
 
   const handleNavigateToPlay = (animeData) => {
-    navigation.navigate('Play', { anime: animeData });
+    // Pass the exact structure play.js expects
+    navigation.navigate('Play', { 
+      anime: {
+        id: animeData.id,
+        title: animeData.title,
+        coverImage: animeData.coverImage,
+        backdrop: animeData.backdrop,
+        description: animeData.description,
+        genres: animeData.genres,
+        status: animeData.status,
+        score: animeData.score || 'N/A',
+        rating: animeData.contentRating
+      } 
+    });
   };
 
   const toggleLibrary = async (anime) => {
@@ -234,7 +249,6 @@ export default function Carousel({ user }) {
       {slides.map((slide, i) => (
         <Animated.View key={slide.id} style={[styles.slideWrapper, { opacity: fadeAnims[i], zIndex: currentIndex === i ? 2 : 1 }]}>
           
-          {/* TAP ANYWHERE TO OPEN PLAY.JS */}
           <TouchableOpacity 
             style={StyleSheet.absoluteFillObject} 
             activeOpacity={0.9} 
@@ -286,14 +300,11 @@ export default function Carousel({ user }) {
 
               <Text style={styles.descriptionText} numberOfLines={3}>{slide.description}</Text>
 
-              {/* ACTION BUTTONS */}
               <View style={styles.buttonRow}>
-                {/* Play Button opens Play.js */}
                 <TouchableOpacity style={styles.playButton} activeOpacity={0.8} onPress={() => handleNavigateToPlay(slide)}>
                   <Text style={styles.playButtonText}>▶ Play</Text>
                 </TouchableOpacity>
                 
-                {/* Library and Share stop propagation so they don't trigger the background tap */}
                 <TouchableOpacity 
                   style={[styles.libButton, librarySet.has(slide.id) && styles.libButtonActive]}
                   onPress={() => toggleLibrary(slide)}
@@ -310,7 +321,6 @@ export default function Carousel({ user }) {
               </View>
             </View>
           </TouchableOpacity>
-
         </Animated.View>
       ))}
 
