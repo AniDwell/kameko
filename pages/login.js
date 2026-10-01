@@ -1,45 +1,22 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  Alert,
-  Image,
-  ScrollView,
-  Animated,
-  KeyboardAvoidingView,
-  Platform,
-  Easing
+  View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, Image,
+  ScrollView, Animated, KeyboardAvoidingView, Platform, Easing
 } from 'react-native';
 import auth from '@react-native-firebase/auth';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import Svg, { Path, Circle } from 'react-native-svg';
 
-// Custom SVG Icons
 const EyeIcon = ({ visible }) => (
   <Svg width="22" height="22" viewBox="0 0 24 24" fill="none">
     {visible ? (
       <>
-        <Path
-          d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
-          stroke="#AAAAAA"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+        <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="#AAAAAA" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         <Circle cx="12" cy="12" r="3" stroke="#AAAAAA" strokeWidth="2" />
       </>
     ) : (
       <>
-        <Path
-          d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"
-          stroke="#888888"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+        <Path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" stroke="#888888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         <Path d="M1 1l22 22" stroke="#E50914" strokeWidth="2" strokeLinecap="round" />
       </>
     )}
@@ -56,7 +33,7 @@ const GoogleIcon = () => (
 );
 
 export default function Login({ setLoggedInUser }) {
-  const [mode, setMode] = useState('login'); // 'login' | 'signup' | 'forgot'
+  const [mode, setMode] = useState('login'); 
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -65,12 +42,10 @@ export default function Login({ setLoggedInUser }) {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Animations
   const progressAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current; // Start 30px down
+  const slideAnim = useRef(new Animated.Value(30)).current; 
 
-  // Google Sign-In Config
   useEffect(() => {
     try {
       GoogleSignin.configure({
@@ -82,24 +57,13 @@ export default function Login({ setLoggedInUser }) {
     }
   }, []);
 
-  // Entrance Animation Trigger
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 800,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 800,
-        easing: Easing.out(Easing.exp),
-        useNativeDriver: true,
-      }),
+      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 800, easing: Easing.out(Easing.exp), useNativeDriver: true }),
     ]).start();
   }, []);
 
-  // Top Loading Bar Animation
   useEffect(() => {
     if (loading) {
       progressAnim.setValue(0);
@@ -115,12 +79,8 @@ export default function Login({ setLoggedInUser }) {
     }
   }, [loading]);
 
-  const progressBarWidth = progressAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0%', '100%'],
-  });
+  const progressBarWidth = progressAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
 
-  // Switch Mode with slight animation reset
   const changeMode = (newMode) => {
     setMode(newMode);
     fadeAnim.setValue(0.5);
@@ -184,7 +144,6 @@ export default function Login({ setLoggedInUser }) {
       setLoggedInUser(userCredential.user);
     } catch (error) {
       if (error.code === statusCodes.SIGN_IN_CANCELLED) {
-        // Cancelled
       } else if (error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
         Alert.alert('Error', 'Play Services not available.');
       } else {
@@ -203,17 +162,11 @@ export default function Login({ setLoggedInUser }) {
         </View>
       )}
 
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-        <Animated.View 
-          style={[styles.animContainer, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}
-        >
-          {/* Header Image Only (Text Removed) */}
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" overScrollMode="never" bounces={false}>
+        <Animated.View style={[styles.animContainer, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+          
           <View style={styles.headerWrapper}>
-            <Image
-              source={require('../assets/kameko_header.png')}
-              style={styles.headerImage}
-              resizeMode="contain"
-            />
+            <Image source={require('../assets/kameko_header.png')} style={styles.headerImage} resizeMode="contain" />
           </View>
 
           <View style={styles.card}>
@@ -223,44 +176,18 @@ export default function Login({ setLoggedInUser }) {
 
             {mode === 'signup' && (
               <View style={styles.inputWrapper}>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Username"
-                  placeholderTextColor="#777777"
-                  value={username}
-                  onChangeText={setUsername}
-                  autoCapitalize="none"
-                />
+                <TextInput style={styles.input} placeholder="Username" placeholderTextColor="#777777" value={username} onChangeText={setUsername} autoCapitalize="none" />
               </View>
             )}
 
             <View style={styles.inputWrapper}>
-              <TextInput
-                style={styles.input}
-                placeholder="Email address"
-                placeholderTextColor="#777777"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                value={email}
-                onChangeText={setEmail}
-              />
+              <TextInput style={styles.input} placeholder="Email address" placeholderTextColor="#777777" keyboardType="email-address" autoCapitalize="none" value={email} onChangeText={setEmail} />
             </View>
 
             {mode !== 'forgot' && (
               <View style={styles.inputWrapperWithIcon}>
-                <TextInput
-                  style={styles.inputFlex}
-                  placeholder="Password"
-                  placeholderTextColor="#777777"
-                  secureTextEntry={!showPassword}
-                  value={password}
-                  onChangeText={setPassword}
-                />
-                <TouchableOpacity
-                  style={styles.iconButton}
-                  onPress={() => setShowPassword(!showPassword)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
+                <TextInput style={styles.inputFlex} placeholder="Password" placeholderTextColor="#777777" secureTextEntry={!showPassword} value={password} onChangeText={setPassword} />
+                <TouchableOpacity style={styles.iconButton} onPress={() => setShowPassword(!showPassword)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                   <EyeIcon visible={showPassword} />
                 </TouchableOpacity>
               </View>
@@ -268,19 +195,8 @@ export default function Login({ setLoggedInUser }) {
 
             {mode === 'signup' && (
               <View style={styles.inputWrapperWithIcon}>
-                <TextInput
-                  style={styles.inputFlex}
-                  placeholder="Confirm password"
-                  placeholderTextColor="#777777"
-                  secureTextEntry={!showConfirmPassword}
-                  value={confirmPassword}
-                  onChangeText={setConfirmPassword}
-                />
-                <TouchableOpacity
-                  style={styles.iconButton}
-                  onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
+                <TextInput style={styles.inputFlex} placeholder="Confirm password" placeholderTextColor="#777777" secureTextEntry={!showConfirmPassword} value={confirmPassword} onChangeText={setConfirmPassword} />
+                <TouchableOpacity style={styles.iconButton} onPress={() => setShowConfirmPassword(!showConfirmPassword)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                   <EyeIcon visible={showConfirmPassword} />
                 </TouchableOpacity>
               </View>
@@ -292,12 +208,7 @@ export default function Login({ setLoggedInUser }) {
               </TouchableOpacity>
             )}
 
-            <TouchableOpacity
-              style={[styles.primaryBtn, loading && styles.btnDisabled]}
-              onPress={handleAuth}
-              disabled={loading}
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={[styles.primaryBtn, loading && styles.btnDisabled]} onPress={handleAuth} disabled={loading} activeOpacity={0.8}>
               <Text style={styles.primaryBtnText}>
                 {mode === 'login' ? 'Sign In' : mode === 'signup' ? 'Create Account' : 'Send Recovery Email'}
               </Text>
@@ -306,17 +217,10 @@ export default function Login({ setLoggedInUser }) {
             {mode !== 'forgot' && (
               <>
                 <View style={styles.dividerRow}>
-                  <View style={styles.dividerLine} />
-                  <Text style={styles.dividerText}>OR</Text>
-                  <View style={styles.dividerLine} />
+                  <View style={styles.dividerLine} /><Text style={styles.dividerText}>OR</Text><View style={styles.dividerLine} />
                 </View>
 
-                <TouchableOpacity
-                  style={[styles.googleBtn, loading && styles.btnDisabled]}
-                  onPress={handleGoogleLogin}
-                  disabled={loading}
-                  activeOpacity={0.8}
-                >
+                <TouchableOpacity style={[styles.googleBtn, loading && styles.btnDisabled]} onPress={handleGoogleLogin} disabled={loading} activeOpacity={0.8}>
                   <GoogleIcon />
                   <Text style={styles.googleBtnText}>Continue with Google</Text>
                 </TouchableOpacity>
