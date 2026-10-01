@@ -1,5 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Modal, TextInput, FlatList, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  View, 
+  Text, 
+  StyleSheet, 
+  TouchableOpacity, 
+  Image, 
+  Modal, 
+  TextInput, 
+  ActivityIndicator, 
+  Alert,
+  Animated,
+  Easing
+} from 'react-native';
 import firestore from '@react-native-firebase/firestore';
 
 // Map the string names to the actual local files
@@ -12,6 +24,62 @@ const AVATARS = {
   'pfp6.jpg': require('../assets/pfp6.jpg'),
 };
 
+// --- ANIMATED INDIVIDUAL PROFILE CARD ---
+const AnimatedProfileCard = ({ profile, index, onPress, manageMode, isAddButton }) => {
+  const scaleAnim = useRef(new Animated.Value(0)).current; // Entrance scale
+  const opacityAnim = useRef(new Animated.Value(0)).current; // Entrance opacity
+  const pressScale = useRef(new Animated.Value(1)).current; // Tap bounce effect
+
+  useEffect(() => {
+    // Staggered entrance animation
+    Animated.parallel([
+      Animated.timing(opacityAnim, {
+        toValue: 1,
+        duration: 400,
+        delay: index * 100, // Each profile loads 100ms after the previous one
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        friction: 6,
+        tension: 40,
+        delay: index * 100,
+        useNativeDriver: true,
+      })
+    ]).start();
+  }, []);
+
+  const handlePressIn = () => {
+    Animated.spring(pressScale, { toValue: 0.9, useNativeDriver: true }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(pressScale, { toValue: 1, useNativeDriver: true }).start();
+  };
+
+  return (
+    <TouchableOpacity 
+      activeOpacity={0.9}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      onPress={() => onPress(profile)}
+    >
+      <Animated.View style={[styles.profileItem, { opacity: opacityAnim, transform: [{ scale: scaleAnim }, { scale: pressScale }] }]}>
+        <View>
+          {isAddButton ? (
+            <View style={styles.addAvatar}><Text style={styles.addIcon}>+</Text></View>
+          ) : (
+            <Image source={AVATARS[profile.avatar]} style={styles.avatar} />
+          )}
+          {manageMode && !isAddButton && <View style={styles.editOverlay}><Text style={styles.editIcon}>✎</Text></View>}
+        </View>
+        <Text style={styles.profileName}>{isAddButton ? 'Add Profile' : profile.name}</Text>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+};
+
+// --- MAIN PROFILES COMPONENT ---
 export default function Profiles({ user, onSelectProfile }) {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -23,10 +91,13 @@ export default function Profiles({ user, onSelectProfile }) {
   const [tempName, setTempName] = useState('');
   const [tempAvatar, setTempAvatar] = useState('pfp1.jpg');
 
+  // Entrance Title Animation
+  const titleOpacity = useRef(new Animated.Value(0)).current;
+  const titleTranslateY = useRef(new Animated.Value(-20)).current;
+
   useEffect(() => {
     if (!user) return;
     
-    // Listen to sub-collection: users/{uid}/profiles
     const subscriber = firestore()
       .collection('users')
       .doc(user.uid)
@@ -34,16 +105,18 @@ export default function Profiles({ user, onSelectProfile }) {
       .onSnapshot(querySnapshot => {
         const fetchedProfiles = [];
         querySnapshot.forEach(documentSnapshot => {
-          fetchedProfiles.push({
-            id: documentSnapshot.id,
-            ...documentSnapshot.data(),
-          });
+          fetchedProfiles.push({ id: documentSnapshot.id, ...documentSnapshot.data() });
         });
         
         setProfiles(fetchedProfiles);
         setLoading(false);
 
-        // Auto-open create modal if no profiles exist
+        // Animate Title when loading finishes
+        Animated.parallel([
+          Animated.timing(titleOpacity, { toValue: 1, duration: 600, useNativeDriver: true }),
+          Animated.timing(titleTranslateY, { toValue: 0, duration: 600, easing: Easing.out(Easing.exp), useNativeDriver: true })
+        ]).start();
+
         if (fetchedProfiles.length === 0 && !loading) {
           openCreateModal();
         }
@@ -53,7 +126,7 @@ export default function Profiles({ user, onSelectProfile }) {
       });
 
     return () => subscriber();
-  }, [user]);
+  }, [user, loading]);
 
   const openCreateModal = () => {
     setEditId(null);
@@ -70,14 +143,9 @@ export default function Profiles({ user, onSelectProfile }) {
   };
 
   const saveProfile = async () => {
-    if (tempName.trim() === '') {
-      Alert.alert('Error', 'Please enter a profile name.');
-      return;
-    }
-
+    if (tempName.trim() === '') return Alert.alert('Error', 'Please enter a profile name.');
     try {
       const profileRef = firestore().collection('users').doc(user.uid).collection('profiles');
-      
       if (editId) {
         await profileRef.doc(editId).update({ name: tempName, avatar: tempAvatar });
       } else {
@@ -95,8 +163,7 @@ export default function Profiles({ user, onSelectProfile }) {
       { text: 'Delete', style: 'destructive', onPress: async () => {
           await firestore().collection('users').doc(user.uid).collection('profiles').doc(id).delete();
           setModalVisible(false);
-        }
-      }
+        }}
     ]);
   };
 
@@ -106,35 +173,37 @@ export default function Profiles({ user, onSelectProfile }) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.headerTitle}>Who's watching?</Text>
+      <Animated.Text style={[styles.headerTitle, { opacity: titleOpacity, transform: [{ translateY: titleTranslateY }] }]}>
+        Who's watching?
+      </Animated.Text>
 
       <View style={styles.grid}>
-        {profiles.map((profile) => (
-          <TouchableOpacity 
-            key={profile.id} 
-            style={styles.profileItem}
-            onPress={() => manageMode ? openEditModal(profile) : onSelectProfile(profile)}
-          >
-            <View>
-              <Image source={AVATARS[profile.avatar]} style={styles.avatar} />
-              {manageMode && <View style={styles.editOverlay}><Text style={styles.editIcon}>✎</Text></View>}
-            </View>
-            <Text style={styles.profileName}>{profile.name}</Text>
-          </TouchableOpacity>
+        {profiles.map((profile, index) => (
+          <AnimatedProfileCard
+            key={profile.id}
+            profile={profile}
+            index={index}
+            manageMode={manageMode}
+            onPress={(p) => manageMode ? openEditModal(p) : onSelectProfile(p)}
+          />
         ))}
 
         {profiles.length < 5 && (
-          <TouchableOpacity style={styles.profileItem} onPress={openCreateModal}>
-            <View style={styles.addAvatar}><Text style={styles.addIcon}>+</Text></View>
-            <Text style={styles.profileName}>Add Profile</Text>
-          </TouchableOpacity>
+          <AnimatedProfileCard
+            key="add-btn"
+            isAddButton={true}
+            index={profiles.length}
+            onPress={openCreateModal}
+          />
         )}
       </View>
 
       {profiles.length > 0 && (
-        <TouchableOpacity style={styles.manageBtn} onPress={() => setManageMode(!manageMode)}>
-          <Text style={styles.manageBtnText}>{manageMode ? 'Done' : 'Manage Profiles'}</Text>
-        </TouchableOpacity>
+        <Animated.View style={{ opacity: titleOpacity }}>
+          <TouchableOpacity style={styles.manageBtn} onPress={() => setManageMode(!manageMode)}>
+            <Text style={styles.manageBtnText}>{manageMode ? 'Done' : 'Manage Profiles'}</Text>
+          </TouchableOpacity>
+        </Animated.View>
       )}
 
       {/* CREATE / EDIT MODAL */}
@@ -146,10 +215,7 @@ export default function Profiles({ user, onSelectProfile }) {
             <View style={styles.avatarList}>
               {Object.keys(AVATARS).map((imgKey) => (
                 <TouchableOpacity key={imgKey} onPress={() => setTempAvatar(imgKey)}>
-                  <Image 
-                    source={AVATARS[imgKey]} 
-                    style={[styles.smallAvatar, tempAvatar === imgKey && styles.selectedAvatar]} 
-                  />
+                  <Image source={AVATARS[imgKey]} style={[styles.smallAvatar, tempAvatar === imgKey && styles.selectedAvatar]} />
                 </TouchableOpacity>
               ))}
             </View>
@@ -157,7 +223,7 @@ export default function Profiles({ user, onSelectProfile }) {
             <TextInput
               style={styles.input}
               placeholder="Profile Name"
-              placeholderTextColor="#888"
+              placeholderTextColor="#777"
               value={tempName}
               onChangeText={setTempName}
               maxLength={15}
@@ -187,29 +253,30 @@ export default function Profiles({ user, onSelectProfile }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000000', alignItems: 'center', justifyContent: 'center' },
   center: { flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { color: '#ffffff', fontSize: 24, fontWeight: 'bold', marginBottom: 40 },
+  headerTitle: { color: '#ffffff', fontSize: 26, fontWeight: '800', marginBottom: 40, letterSpacing: 0.5 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 20, paddingHorizontal: 20 },
   profileItem: { alignItems: 'center', marginHorizontal: 10, marginBottom: 20 },
-  avatar: { width: 100, height: 100, borderRadius: 8, backgroundColor: '#1a1a1a' },
-  addAvatar: { width: 100, height: 100, borderRadius: 8, borderWidth: 1, borderColor: '#555', justifyContent: 'center', alignItems: 'center' },
-  addIcon: { color: '#555', fontSize: 40 },
-  editOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
-  editIcon: { color: '#ffffff', fontSize: 24 },
-  profileName: { color: '#888', marginTop: 10, fontSize: 16 },
-  manageBtn: { marginTop: 40, paddingVertical: 10, paddingHorizontal: 20, borderWidth: 1, borderColor: '#888' },
-  manageBtnText: { color: '#888', fontSize: 16, letterSpacing: 2, textTransform: 'uppercase' },
-  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
-  modalContainer: { width: '90%', backgroundColor: '#1a1a1a', borderRadius: 10, padding: 20 },
-  modalTitle: { color: '#ffffff', fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
-  avatarList: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 10, marginBottom: 20 },
-  smallAvatar: { width: 60, height: 60, borderRadius: 8, opacity: 0.5 },
+  avatar: { width: 105, height: 105, borderRadius: 10, backgroundColor: '#1a1a1a' },
+  addAvatar: { width: 105, height: 105, borderRadius: 10, borderWidth: 1.5, borderColor: '#444', justifyContent: 'center', alignItems: 'center' },
+  addIcon: { color: '#666', fontSize: 45, fontWeight: '300', marginTop: -5 },
+  editOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  editIcon: { color: '#ffffff', fontSize: 28 },
+  profileName: { color: '#AAAAAA', marginTop: 12, fontSize: 16, fontWeight: '600' },
+  manageBtn: { marginTop: 45, paddingVertical: 12, paddingHorizontal: 24, borderWidth: 1, borderColor: '#555', borderRadius: 4 },
+  manageBtnText: { color: '#888', fontSize: 16, letterSpacing: 2, textTransform: 'uppercase', fontWeight: 'bold' },
+  
+  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
+  modalContainer: { width: '90%', backgroundColor: '#161616', borderRadius: 14, padding: 25, borderWidth: 1, borderColor: '#262626' },
+  modalTitle: { color: '#ffffff', fontSize: 22, fontWeight: 'bold', marginBottom: 25, textAlign: 'center' },
+  avatarList: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12, marginBottom: 25 },
+  smallAvatar: { width: 65, height: 65, borderRadius: 8, opacity: 0.4 },
   selectedAvatar: { opacity: 1, borderWidth: 2, borderColor: '#ffffff' },
-  input: { backgroundColor: '#333', color: '#fff', height: 50, borderRadius: 5, paddingHorizontal: 15, marginBottom: 20 },
+  input: { backgroundColor: '#111', color: '#fff', height: 55, borderRadius: 8, paddingHorizontal: 15, marginBottom: 25, fontSize: 16, borderWidth: 1, borderColor: '#333' },
   modalActions: { flexDirection: 'row', alignItems: 'center' },
-  cancelBtn: { padding: 10, marginRight: 15 },
-  cancelBtnText: { color: '#ffffff', fontSize: 16 },
-  saveBtn: { backgroundColor: '#ffffff', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 5 },
+  cancelBtn: { padding: 12, marginRight: 10 },
+  cancelBtnText: { color: '#AAAAAA', fontSize: 16, fontWeight: 'bold' },
+  saveBtn: { backgroundColor: '#ffffff', paddingVertical: 12, paddingHorizontal: 25, borderRadius: 6 },
   saveBtnText: { color: '#000000', fontSize: 16, fontWeight: 'bold' },
-  deleteBtn: { padding: 10 },
+  deleteBtn: { padding: 12 },
   deleteBtnText: { color: '#E50914', fontSize: 16, fontWeight: 'bold' }
 });
