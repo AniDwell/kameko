@@ -4,10 +4,12 @@ import {
   TouchableOpacity, ActivityIndicator 
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
+import { useNavigation } from '@react-navigation/native';
 
 const BRAND_RED = '#E50914';
 
 export default function TrendingSlider({ user }) {
+  const navigation = useNavigation();
   const [trendingList, setTrendingList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [librarySet, setLibrarySet] = useState(new Set());
@@ -27,20 +29,24 @@ export default function TrendingSlider({ user }) {
     return () => unsubscribe();
   }, [user]);
 
-  // 2. Fetch Trending Anime directly from AniList
+  // 2. Fetch Trending from AniList -> Verify with Vercel API
   useEffect(() => {
     const fetchTrending = async () => {
       try {
         const query = `
           query { 
-            Page(page: 1, perPage: 15) { 
+            Page(page: 1, perPage: 25) { 
               media(type: ANIME, sort: TRENDING_DESC, isAdult: false) { 
                 id
                 title { romaji english }
                 coverImage { extraLarge }
+                bannerImage
+                description
+                genres
                 episodes
                 status
                 format
+                averageScore
               } 
             } 
           }
@@ -53,18 +59,53 @@ export default function TrendingSlider({ user }) {
         });
         
         const json = await response.json();
-        const media = json?.data?.Page?.media || [];
+        const aniListMedia = json?.data?.Page?.media || [];
 
-        const formattedAnime = media.map((anime) => ({
-          id: String(anime.id),
-          title: anime.title.english || anime.title.romaji,
-          image: anime.coverImage?.extraLarge,
-          episode: anime.episodes || '?',
-          status: anime.status,
-          format: anime.format
+        const verifiedTrending = await Promise.all(aniListMedia.map(async (anime) => {
+          const titleEng = anime.title.english || anime.title.romaji;
+          const titleRom = anime.title.romaji || titleEng;
+          let streamId = null;
+
+          try {
+            // STRICT VERIFICATION: Query your Vercel API
+            const baseUrl = 'https://anikoto-api-lyart.vercel.app';
+            const vercelRes = await fetch(`${baseUrl}/api/search?keyword=${encodeURIComponent(titleEng)}`);
+            if (!vercelRes.ok) return null;
+            
+            const vercelData = await vercelRes.json();
+            const apiResults = vercelData.data || vercelData.results || vercelData || [];
+            
+            // Try to match exact title
+            const exactMatch = apiResults.find(r => {
+              const rTitle = (r.title || '').toLowerCase();
+              return rTitle === titleEng.toLowerCase() || rTitle === titleRom.toLowerCase();
+            }) || apiResults[0];
+
+            // IF NOT FOUND IN API, IGNORE COMPLETELY
+            if (!exactMatch) return null;
+
+            streamId = exactMatch.id;
+          } catch(e) {
+            console.log("Trending Slide verification error for:", titleEng);
+            return null; // Drop on error
+          }
+
+          return {
+            id: streamId, // Use exact streaming ID
+            title: titleEng,
+            image: anime.coverImage?.extraLarge,
+            backdrop: anime.bannerImage || anime.coverImage?.extraLarge,
+            description: anime.description?.replace(/<[^>]*>?/gm, '').trim() || 'No description available.',
+            genres: anime.genres || ['Anime'],
+            score: anime.averageScore,
+            episode: anime.episodes || '?',
+            status: anime.status,
+            format: anime.format
+          };
         }));
 
-        setTrendingList(formattedAnime);
+        // Filter out nulls and take the top 15 verified shows
+        setTrendingList(verifiedTrending.filter(item => item !== null).slice(0, 15));
       } catch (error) {
         console.error("Trending Slider fetch error:", error);
       } finally {
@@ -75,62 +116,56 @@ export default function TrendingSlider({ user }) {
     fetchTrending();
   }, []);
 
-  // 3. Toggle Library Action
+  const handleNavigateToPlay = (anime) => {
+    navigation.navigate('Play', { 
+      anime: {
+        id: anime.id,
+        title: anime.title,
+        coverImage: anime.image,
+        backdrop: anime.backdrop,
+        description: anime.description,
+        genres: anime.genres,
+        status: anime.status,
+        score: anime.score,
+        rating: 'U/A 13+'
+      } 
+    });
+  };
+
   const toggleLibrary = async (anime) => {
     if (!user) return;
     const ref = firestore().collection('users').doc(user.uid).collection('library').doc(anime.id);
-    
     if (librarySet.has(anime.id)) {
       await ref.delete();
     } else {
-      await ref.set({
-        id: anime.id,
-        title: anime.title,
-        img: anime.image,
-        lastKnownEpisode: parseInt(anime.episode) || 0,
-        releaseStatus: anime.status,
-        addedAt: firestore.FieldValue.serverTimestamp()
-      });
+      await ref.set({ id: anime.id, title: anime.title, img: anime.image, addedAt: firestore.FieldValue.serverTimestamp() });
     }
   };
 
   const renderCard = ({ item, index }) => {
     const isAdded = librarySet.has(item.id);
-
     return (
       <TouchableOpacity 
         style={styles.cardContainer} 
         activeOpacity={0.8}
-        onPress={() => console.log('Navigate to info:', item.id)}
+        onPress={() => handleNavigateToPlay(item)}
       >
         <View style={styles.imageWrapper}>
           <Image source={{ uri: item.image }} style={styles.coverImage} resizeMode="cover" />
           
-          {/* Top Left Badges */}
           <View style={styles.badgeContainer}>
-            <View style={styles.rankBadge}>
-              <Text style={styles.rankBadgeText}>#{index + 1}</Text>
-            </View>
-            {item.episode !== '?' && (
-              <View style={styles.epBadge}>
-                <Text style={styles.epBadgeText}>EP {item.episode}</Text>
-              </View>
-            )}
-            <View style={styles.formatBadge}>
-              <Text style={styles.formatBadgeText}>{item.format === 'TV' ? 'SERIES' : item.format}</Text>
-            </View>
+            <View style={styles.rankBadge}><Text style={styles.rankBadgeText}>#{index + 1}</Text></View>
+            {item.episode !== '?' && <View style={styles.epBadge}><Text style={styles.epBadgeText}>EP {item.episode}</Text></View>}
+            <View style={styles.formatBadge}><Text style={styles.formatBadgeText}>{item.format === 'TV' ? 'SERIES' : item.format}</Text></View>
           </View>
 
-          {/* Top Right Save Button */}
           <TouchableOpacity 
             style={[styles.saveBtn, isAdded && styles.saveBtnActive]}
             onPress={() => toggleLibrary(item)}
             activeOpacity={0.8}
             hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
           >
-            <Text style={[styles.saveBtnIcon, isAdded && styles.saveIconActive]}>
-              {isAdded ? '✓' : '+'}
-            </Text>
+            <Text style={[styles.saveBtnIcon, isAdded && styles.saveIconActive]}>{isAdded ? '✓' : '+'}</Text>
           </TouchableOpacity>
         </View>
 
@@ -139,22 +174,12 @@ export default function TrendingSlider({ user }) {
     );
   };
 
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="small" color={BRAND_RED} />
-      </View>
-    );
-  }
-
+  if (loading) return <View style={styles.loadingContainer}><ActivityIndicator size="small" color={BRAND_RED} /></View>;
   if (trendingList.length === 0) return null;
 
   return (
     <View style={styles.sectionContainer}>
-      <View style={styles.headerRow}>
-        <Text style={styles.sectionTitle}>Trending Now</Text>
-      </View>
-
+      <View style={styles.headerRow}><Text style={styles.sectionTitle}>Trending Now</Text></View>
       <FlatList
         data={trendingList}
         horizontal
@@ -172,32 +197,12 @@ export default function TrendingSlider({ user }) {
 const styles = StyleSheet.create({
   sectionContainer: { marginTop: 10, marginBottom: 25 },
   loadingContainer: { height: 200, justifyContent: 'center', alignItems: 'center' },
-  
   headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 12 },
-  sectionTitle: { 
-    color: '#FFFFFF', 
-    fontSize: 18, 
-    fontWeight: 'bold',
-    borderLeftWidth: 3,
-    borderLeftColor: BRAND_RED,
-    paddingLeft: 8
-  },
-  
+  sectionTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold', borderLeftWidth: 3, borderLeftColor: BRAND_RED, paddingLeft: 8 },
   listPadding: { paddingHorizontal: 20 },
-  
   cardContainer: { width: 140, marginRight: 15 },
-  imageWrapper: { 
-    width: 140, 
-    height: 210, 
-    borderRadius: 8, 
-    overflow: 'hidden',
-    backgroundColor: '#1A1A1A',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)'
-  },
+  imageWrapper: { width: 140, height: 210, borderRadius: 8, overflow: 'hidden', backgroundColor: '#1A1A1A', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   coverImage: { width: '100%', height: '100%' },
-  
-  // Badges
   badgeContainer: { position: 'absolute', top: 8, left: 8, alignItems: 'flex-start', gap: 4 },
   rankBadge: { backgroundColor: BRAND_RED, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, shadowColor: BRAND_RED, shadowOpacity: 0.6, shadowRadius: 4 },
   rankBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
@@ -205,20 +210,9 @@ const styles = StyleSheet.create({
   epBadgeText: { color: '#000000', fontSize: 10, fontWeight: '900' },
   formatBadge: { backgroundColor: 'rgba(0,0,0,0.75)', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
   formatBadgeText: { color: '#FFFFFF', fontSize: 9, fontWeight: 'bold' },
-
-  // Save Button
-  saveBtn: {
-    position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.7)',
-    width: 28, height: 28, borderRadius: 6, justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)'
-  },
+  saveBtn: { position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.7)', width: 28, height: 28, borderRadius: 6, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
   saveBtnActive: { backgroundColor: 'rgba(0,0,0,0.85)' },
   saveBtnIcon: { color: '#FFFFFF', fontSize: 18, fontWeight: '300', marginTop: -2 },
   saveIconActive: { color: BRAND_RED, fontWeight: 'bold' },
-
-  // Title
-  animeTitle: { 
-    color: '#E0E0E0', fontSize: 13, fontWeight: '700', marginTop: 8,
-    textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2
-  }
+  animeTitle: { color: '#E0E0E0', fontSize: 13, fontWeight: '700', marginTop: 8, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }
 });
