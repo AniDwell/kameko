@@ -1,10 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
-import auth from '@react-native-firebase/auth';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, Image } from 'react-native';
 
-// Import your other screens
-import Login from './login';
-import Profile from './profile';
+// Import the new Carousel component
+import Carousel from './home/carousel';
+import ProfileSettings from './profile'; 
+
+const AVATARS = {
+  'pfp1.jpg': require('../assets/pfp1.jpg'),
+  'pfp2.jpg': require('../assets/pfp2.jpg'),
+  'pfp3.jpg': require('../assets/pfp3.jpg'),
+  'pfp4.jpg': require('../assets/pfp4.jpg'),
+  'pfp5.jpg': require('../assets/pfp5.jpg'),
+  'pfp6.jpg': require('../assets/pfp6.jpg'),
+};
 
 const mockData = [
   { id: '1', title: 'Movie 1' },
@@ -21,7 +29,7 @@ const HorizontalRow = ({ title }) => (
       horizontal
       showsHorizontalScrollIndicator={false}
       keyExtractor={(item) => item.id}
-      renderItem={({ item }) => (
+      renderItem={() => (
         <View style={styles.card}>
           <Text style={styles.cardText}>Cover</Text>
         </View>
@@ -30,41 +38,12 @@ const HorizontalRow = ({ title }) => (
   </View>
 );
 
-export default function Home() {
-  const [initializing, setInitializing] = useState(true);
-  const [user, setUser] = useState(null);
+export default function Home({ user, activeProfile, onSwitchProfile }) {
   const [activeTab, setActiveTab] = useState('Home');
 
-  // Firebase Authentication Check
-  useEffect(() => {
-    const subscriber = auth().onAuthStateChanged((currentUser) => {
-      setUser(currentUser);
-      if (initializing) setInitializing(false);
-      
-      // If user logs out, reset tab to Home so they don't get stuck on Profile
-      if (!currentUser) setActiveTab('Home'); 
-    });
-    return subscriber; // Unsubscribe on unmount
-  }, [initializing]);
-
-  // 1. Show loading spinner while checking Firebase session
-  if (initializing) {
-    return (
-      <View style={styles.loaderContainer}>
-        <ActivityIndicator size="large" color="#E50914" />
-      </View>
-    );
-  }
-
-  // 2. Gatekeeper: If no user, open Login.js
-  if (!user) {
-    return <Login setLoggedInUser={setUser} />;
-  }
-
-  // Bottom Navigation Component
   const renderBottomNav = () => (
     <View style={styles.bottomNav}>
-      {['Home', 'Search', 'My List', 'Profile'].map((tab, idx) => (
+      {['Home', 'Search', 'My List', 'Settings'].map((tab, idx) => (
         <TouchableOpacity key={idx} style={styles.navItem} onPress={() => setActiveTab(tab)}>
           <Text style={[styles.navText, activeTab === tab && styles.navTextActive]}>{tab}</Text>
         </TouchableOpacity>
@@ -72,48 +51,49 @@ export default function Home() {
     </View>
   );
 
-  // 3. If user tapped Profile in bottom nav, show Profile.js
-  if (activeTab === 'Profile') {
+  if (activeTab === 'Settings') {
     return (
       <View style={styles.container}>
-        <Profile user={user} setLoggedInUser={setUser} />
+        <ProfileSettings user={user} setLoggedInUser={() => {}} /> 
         {renderBottomNav()}
       </View>
     );
   }
 
-  // 4. Default: Show the KAMEKO Home OTT UI
   return (
     <View style={styles.container}>
-      {/* HEADER */}
+      {/* HEADER WITH PROFILE AVATAR */}
       <View style={styles.header}>
         <Text style={styles.headerLogo}>KAMEKO</Text>
-        <TouchableOpacity><Text style={styles.headerBtn}>Search</Text></TouchableOpacity>
+        <TouchableOpacity onPress={onSwitchProfile} style={styles.profileSwitcher}>
+          <Image 
+            source={AVATARS[activeProfile?.avatar || 'pfp1.jpg']} 
+            style={styles.headerAvatar} 
+          />
+        </TouchableOpacity>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} style={styles.scroll}>
-        {/* HERO CAROUSEL */}
-        <View style={styles.hero}>
-          <Text style={styles.heroTitle}>Featured Premiere</Text>
-          <View style={styles.heroBtnRow}>
-            <TouchableOpacity style={styles.playBtn}>
-              <Text style={styles.playBtnText}>▶ Play</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.infoBtn}>
-              <Text style={styles.infoBtnText}>+ My List</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+      {/* OVER-SCROLL DISABLED FOR ZERO WHITE FLASH */}
+      <ScrollView 
+        showsVerticalScrollIndicator={false} 
+        style={styles.scroll}
+        overScrollMode="never" 
+        bounces={false}
+      >
+        
+        {/* NEW DYNAMIC CAROUSEL PLACED HERE */}
+        <Carousel user={user} />
 
         {/* SCROLLING SHELVES */}
-        <HorizontalRow title="Continue Watching" />
-        <HorizontalRow title="Trending Now" />
-        <HorizontalRow title="Top 10 in Anime" />
-        <HorizontalRow title="Action & Adventure" />
+        <View style={styles.contentPadding}>
+          <HorizontalRow title={`Continue Watching for ${activeProfile?.name || 'You'}`} />
+          <HorizontalRow title="Trending Now" />
+          <HorizontalRow title="Top 10 in Anime" />
+        </View>
+        
         <View style={{ height: 30 }} />
       </ScrollView>
 
-      {/* BOTTOM NAV */}
       {renderBottomNav()}
     </View>
   );
@@ -121,23 +101,34 @@ export default function Home() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000000' },
-  loaderContainer: { flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 15 },
+  header: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    paddingHorizontal: 20, 
+    paddingVertical: 15,
+    backgroundColor: '#000000', // Ensures top area stays black
+    zIndex: 100 // Keeps header above scrolling carousel
+  },
   headerLogo: { color: '#E50914', fontSize: 24, fontWeight: '900', letterSpacing: 2 },
-  headerBtn: { color: '#ffffff', fontSize: 16 },
+  profileSwitcher: { borderWidth: 1, borderColor: '#333', borderRadius: 4 },
+  headerAvatar: { width: 32, height: 32, borderRadius: 4 },
   scroll: { flex: 1 },
-  hero: { height: 400, backgroundColor: '#1a1a1a', justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 30, marginBottom: 20, borderBottomWidth: 1, borderBottomColor: '#333333' },
-  heroTitle: { color: '#ffffff', fontSize: 28, fontWeight: 'bold', marginBottom: 20 },
-  heroBtnRow: { flexDirection: 'row', gap: 15 },
-  playBtn: { backgroundColor: '#ffffff', paddingVertical: 8, paddingHorizontal: 25, borderRadius: 4 },
-  playBtnText: { color: '#000000', fontWeight: 'bold', fontSize: 16 },
-  infoBtn: { backgroundColor: '#333333', paddingVertical: 8, paddingHorizontal: 25, borderRadius: 4 },
-  infoBtnText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16 },
+  contentPadding: { paddingTop: 20 },
   rowContainer: { marginBottom: 25 },
   rowTitle: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginLeft: 15, marginBottom: 10 },
   card: { width: 120, height: 170, backgroundColor: '#222222', marginLeft: 15, borderRadius: 6, justifyContent: 'center', alignItems: 'center' },
   cardText: { color: '#555555' },
-  bottomNav: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', height: 65, backgroundColor: '#0a0a0a', borderTopWidth: 1, borderTopColor: '#222222', paddingBottom: 10 },
+  bottomNav: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-around', 
+    alignItems: 'center', 
+    height: 65, 
+    backgroundColor: '#0a0a0a', 
+    borderTopWidth: 1, 
+    borderTopColor: '#222222', 
+    paddingBottom: 10 
+  },
   navItem: { alignItems: 'center', padding: 10 },
   navText: { color: '#888888', fontSize: 12, marginTop: 4 },
   navTextActive: { color: '#E50914', fontWeight: 'bold' }
