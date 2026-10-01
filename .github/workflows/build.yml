@@ -1,0 +1,51 @@
+name: Build Kameko APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Standalone APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate Android project
+        run: npx expo prebuild --platform android --clean
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Grant execute permission for Gradle
+        working-directory: android
+        run: chmod +x gradlew
+
+      - name: Build Android Release APK
+        working-directory: android
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=1024m"
+        # The 'clean' command wipes the Gradle cache to prevent lingering AAPT errors
+        run: ./gradlew clean assembleRelease --stacktrace
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kameko-app
+          path: android/app/build/outputs/apk/**/*.apk
