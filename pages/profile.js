@@ -31,44 +31,12 @@ const IconEdit = ({ size = 26, color = "#FFFFFF" }) => (
   </Svg>
 );
 
-// --- MARQUEE TEXT FOR LONG PROFILE NAMES ---
-const MarqueeName = ({ name }) => {
-  const scrollX = useRef(new Animated.Value(0)).current;
-  const isLong = name.length > 9;
-
-  useEffect(() => {
-    if (isLong) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(1200),
-          Animated.timing(scrollX, { 
-            toValue: -55, 
-            duration: 3500, 
-            easing: Easing.linear, 
-            useNativeDriver: true 
-          }),
-          Animated.delay(1000),
-          Animated.timing(scrollX, { 
-            toValue: 0, 
-            duration: 3500, 
-            easing: Easing.linear, 
-            useNativeDriver: true 
-          })
-        ])
-      ).start();
-    }
-  }, [isLong, name]);
-
-  if (!isLong) {
-    return <Text style={styles.profileName} numberOfLines={1}>{name}</Text>;
-  }
-
+// --- TRUNCATED NAME (Appends ... for longer names automatically) ---
+const ProfileName = ({ name }) => {
   return (
-    <View style={styles.marqueeContainer}>
-      <Animated.Text style={[styles.profileName, { transform: [{ translateX: scrollX }] }]} numberOfLines={1}>
-        {name}
-      </Animated.Text>
-    </View>
+    <Text style={styles.profileName} numberOfLines={1} ellipsizeMode="tail">
+      {name}
+    </Text>
   );
 };
 
@@ -83,7 +51,7 @@ const AnimatedProfileCard = ({ profile, index, onPress, manageMode, isAddButton 
       Animated.timing(opacityAnim, { toValue: 1, duration: 400, delay: index * 80, useNativeDriver: true }),
       Animated.spring(scaleAnim, { toValue: 1, friction: 6, tension: 40, delay: index * 80, useNativeDriver: true })
     ]).start();
-  }, []);
+  }, [index, opacityAnim, scaleAnim]);
 
   const handlePressIn = () => Animated.spring(pressScale, { toValue: 0.94, useNativeDriver: true }).start();
   const handlePressOut = () => Animated.spring(pressScale, { toValue: 1, useNativeDriver: true }).start();
@@ -112,7 +80,7 @@ const AnimatedProfileCard = ({ profile, index, onPress, manageMode, isAddButton 
             </View>
           )}
         </View>
-        <MarqueeName name={isAddButton ? 'Add Profile' : profile.name} />
+        <ProfileName name={isAddButton ? 'Add Profile' : profile.name} />
       </Animated.View>
     </TouchableOpacity>
   );
@@ -133,7 +101,7 @@ const CustomAlert = ({ visible, title, message, onConfirm, onCancel, isDestructi
       fadeAnim.setValue(0);
       scaleAnim.setValue(0.9);
     }
-  }, [visible]);
+  }, [visible, fadeAnim, scaleAnim]);
 
   if (!visible) return null;
 
@@ -190,7 +158,6 @@ export default function Profiles({ user, onSelectProfile, onHardwareBack }) {
   // --- HARDWARE BACK BUTTON HANDLER ---
   useEffect(() => {
     const backAction = () => {
-      // 1. If an alert or modal is currently visible, close it first
       if (modalVisible) {
         setModalVisible(false);
         return true;
@@ -200,15 +167,12 @@ export default function Profiles({ user, onSelectProfile, onHardwareBack }) {
         return true;
       }
 
-      // 2. If user accessed this screen from home.js (previousProfile exists), return back to home.js
       if (onHardwareBack) {
         onHardwareBack();
         return true;
       }
 
-      // 3. MANDATORY INITIAL LAUNCH:
-      // onHardwareBack is null/undefined. The user MUST select a profile to enter home.js.
-      // Returning true blocks the Android back key from popping or skipping to home.js.
+      // Mandatory initial launch: block back button from bypassing profile selection
       return true;
     };
 
@@ -244,7 +208,7 @@ export default function Profiles({ user, onSelectProfile, onHardwareBack }) {
       });
 
     return () => subscriber();
-  }, [user, loading]);
+  }, [user, loading, titleOpacity, titleTranslateY]);
 
   const showAlert = (title, message, onConfirm, onCancel = null, isDestructive = false) => {
     setAlertConfig({ 
@@ -282,7 +246,6 @@ export default function Profiles({ user, onSelectProfile, onHardwareBack }) {
       return showAlert('Required', 'Please enter a profile name.', () => {});
     }
     
-    // Instantly close popup for seamless UX
     setModalVisible(false);
 
     try {
@@ -329,7 +292,6 @@ export default function Profiles({ user, onSelectProfile, onHardwareBack }) {
   return (
     <View style={styles.container}>
       
-      {/* Kameko Red Top Header Logo */}
       <View style={styles.logoHeader}>
         <Text style={styles.logoText}>KAMEKO</Text>
       </View>
@@ -373,7 +335,6 @@ export default function Profiles({ user, onSelectProfile, onHardwareBack }) {
         </Animated.View>
       )}
 
-      {/* MODAL: ADD / EDIT PROFILE */}
       <Modal visible={modalVisible} animationType="fade" transparent={true} onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalBg}>
           <View style={styles.modalContainer}>
@@ -415,7 +376,6 @@ export default function Profiles({ user, onSelectProfile, onHardwareBack }) {
         </View>
       </Modal>
 
-      {/* PURE NATIVE CSS-STYLE ALERT COMPONENT */}
       <CustomAlert {...alertConfig} />
     </View>
   );
@@ -451,8 +411,14 @@ const styles = StyleSheet.create({
   
   editOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', alignItems: 'center' },
   
-  marqueeContainer: { width: 104, overflow: 'hidden', marginTop: 10 },
-  profileName: { color: '#B3B3B3', fontSize: 14, fontWeight: '600', textAlign: 'center' },
+  profileName: { 
+    color: '#B3B3B3', 
+    fontSize: 14, 
+    fontWeight: '600', 
+    textAlign: 'center', 
+    width: 104, 
+    marginTop: 10 
+  },
   
   manageBtn: { 
     marginTop: 38, 
