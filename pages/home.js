@@ -1,12 +1,10 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, Image, ImageBackground } from 'react-native';
 
-// Import our dynamic API-driven components
 import Carousel from './home/carousel';
 import RecentSlider from './home/recent_slider';
 import TrendingSlider from './home/trending_slider';
-
-// Import settings page for the bottom nav
+import Play from '../pages/play';
 import ProfileSettings from './profile'; 
 
 const AVATARS = {
@@ -18,7 +16,6 @@ const AVATARS = {
   'pfp6.jpg': require('../assets/pfp6.jpg'),
 };
 
-// Mock data for the "Continue Watching" row until we build it dynamically
 const mockData = [
   { id: '1', title: 'Continue 1' },
   { id: '2', title: 'Continue 2' },
@@ -46,6 +43,17 @@ const HorizontalRow = ({ title }) => (
 
 export default function Home({ user, activeProfile, onSwitchProfile }) {
   const [activeTab, setActiveTab] = useState('Home');
+  const [selectedAnime, setSelectedAnime] = useState(null);
+
+  if (selectedAnime) {
+    return (
+      <Play 
+        anime={selectedAnime} 
+        user={user} 
+        onBack={() => setSelectedAnime(null)} 
+      />
+    );
+  }
 
   const renderBottomNav = () => (
     <View style={styles.bottomNav}>
@@ -57,7 +65,6 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
     </View>
   );
 
-  // Show Account Settings (Logout) if Settings tab is tapped
   if (activeTab === 'Settings') {
     return (
       <View style={styles.container}>
@@ -69,35 +76,34 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
 
   return (
     <View style={styles.container}>
-      {/* HEADER WITH PROFILE AVATAR */}
-      <View style={styles.header}>
-        <Text style={styles.headerLogo}>KAMEKO</Text>
+      
+      {/* NEW HEADER: Loads kameko_header.png with Profile Avatar on the right */}
+      <ImageBackground 
+        source={require('../assets/kameko_header.png')} 
+        style={styles.header}
+        resizeMode="cover"
+      >
+        {/* If your image already has the text, you can remove this Text component */}
+        <View style={styles.headerLogoPlaceholder} />
+        
         <TouchableOpacity onPress={onSwitchProfile} style={styles.profileSwitcher} activeOpacity={0.8}>
           <Image 
             source={AVATARS[activeProfile?.avatar || 'pfp1.jpg']} 
             style={styles.headerAvatar} 
           />
         </TouchableOpacity>
-      </View>
+      </ImageBackground>
 
-      {/* OVER-SCROLL DISABLED FOR ZERO WHITE FLASH */}
       <ScrollView 
         showsVerticalScrollIndicator={false} 
         style={styles.scroll}
         overScrollMode="never" 
         bounces={false}
       >
-        
-        {/* 1. DYNAMIC HERO CAROUSEL */}
-        <Carousel user={user} />
+        <Carousel user={user} onSelectAnime={(anime) => setSelectedAnime(anime)} />
+        <RecentSlider user={user} onSelectAnime={(anime) => setSelectedAnime(anime)} />
+        <TrendingSlider user={user} onSelectAnime={(anime) => setSelectedAnime(anime)} />
 
-        {/* 2. DYNAMIC NEW RELEASES SLIDER */}
-        <RecentSlider user={user} />
-
-        {/* 3. DYNAMIC TRENDING SLIDER */}
-        <TrendingSlider user={user} />
-
-        {/* 4. STATIC CONTINUE WATCHING (Placeholder for next feature) */}
         <View style={styles.contentPadding}>
           <HorizontalRow title={`Continue Watching for ${activeProfile?.name || 'You'}`} />
         </View>
@@ -111,53 +117,35 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000000' },
+  container: { flex: 1, backgroundColor: '#050505' }, // Slightly off-black to add depth
   header: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     alignItems: 'center', 
     paddingHorizontal: 20, 
-    paddingVertical: 15,
-    backgroundColor: '#000000', // Ensures top area stays black
-    zIndex: 100 // Keeps header above scrolling carousel
+    paddingTop: 15, // Adjusted for status bar if needed
+    paddingBottom: 15,
+    zIndex: 100,
+    backgroundColor: 'transparent' // Removed solid black
   },
-  headerLogo: { color: '#E50914', fontSize: 24, fontWeight: '900', letterSpacing: 2 },
-  profileSwitcher: { borderWidth: 1, borderColor: '#333', borderRadius: 4, overflow: 'hidden' },
-  headerAvatar: { width: 32, height: 32, borderRadius: 4 },
+  headerLogoPlaceholder: { width: 120, height: 40 }, // Spacer for layout
+  profileSwitcher: { borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.2)', borderRadius: 4, overflow: 'hidden' },
+  headerAvatar: { width: 34, height: 34, borderRadius: 4 },
   scroll: { flex: 1 },
   contentPadding: { paddingTop: 10 },
   rowContainer: { marginBottom: 25 },
   rowTitle: { 
-    color: '#ffffff', 
-    fontSize: 18, 
-    fontWeight: 'bold', 
-    marginLeft: 20, 
-    marginBottom: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: '#E50914',
-    paddingLeft: 8
+    color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginLeft: 20, marginBottom: 12,
+    borderLeftWidth: 3, borderLeftColor: '#E50914', paddingLeft: 8
   },
   card: { 
-    width: 140, 
-    height: 210, 
-    backgroundColor: '#1A1A1A', 
-    marginRight: 15, 
-    borderRadius: 8, 
-    justifyContent: 'center', 
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)'
+    width: 140, height: 210, backgroundColor: '#1A1A1A', marginRight: 15, borderRadius: 8, 
+    justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)'
   },
   cardText: { color: '#555555' },
   bottomNav: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-around', 
-    alignItems: 'center', 
-    height: 65, 
-    backgroundColor: '#0a0a0a', 
-    borderTopWidth: 1, 
-    borderTopColor: '#222222', 
-    paddingBottom: 10 
+    flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', height: 65, 
+    backgroundColor: '#0a0a0a', borderTopWidth: 1, borderTopColor: '#222222', paddingBottom: 10 
   },
   navItem: { alignItems: 'center', padding: 10 },
   navText: { color: '#888888', fontSize: 12, marginTop: 4, fontWeight: '600' },
