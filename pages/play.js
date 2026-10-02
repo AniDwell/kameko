@@ -35,10 +35,12 @@ export default function Play({ anime, user, onBack, navigation }) {
     id: 'solo-leveling',
     title: 'Solo Leveling',
     coverImage: 'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx151807-m1gX3iqITmI6.png',
+    backdrop: 'https://image.tmdb.org/t/p/original/vIgyYkXkg6NC2whRbYjBD7eb3Er.jpg',
     description: "In a world of gifted hunters, Sung Jinwoo struggles as the weakest. After surviving a deadly dungeon, he receives an exclusive quest system.",
     genres: ['Action', 'Fantasy', 'Adventure'],
     score: 85,
-    rating: 'U/A 16+'
+    rating: 'U/A 16+',
+    status: 'RELEASING'
   };
 
   const [loading, setLoading] = useState(true);
@@ -51,6 +53,7 @@ export default function Play({ anime, user, onBack, navigation }) {
   const [descExpanded, setDescExpanded] = useState(false);
   const [userProgress, setUserProgress] = useState({ episodeNum: 1 });
   const [loadingEpisode, setLoadingEpisode] = useState(null);
+  const [isUpcoming, setIsUpcoming] = useState(false);
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
@@ -92,22 +95,61 @@ export default function Play({ anime, user, onBack, navigation }) {
       try {
         setLoading(true);
 
-        // A. Fetch Episodes from Vercel API
-        const episodesRes = await fetch(`${VERCEL_API_BASE}/api/episodes?id=${currentAnime.id}`);
-        const epJson = await episodesRes.json();
-        const epsList = epJson.data || epJson.episodes || epJson || [];
-        
-        const formattedEps = epsList.map((ep, idx) => ({
-          id: String(ep.id || idx + 1),
-          epNumber: ep.number || ep.episode || idx + 1,
-          title: ep.title || `Episode ${ep.number || idx + 1}`,
-          desc: ep.description || 'No summary available.',
-          still: ep.image || currentAnime.coverImage,
-          duration: '24m'
-        }));
-        setEpisodes(formattedEps);
+        // A. Resolve Anime on Vercel to get the correct episodes ID
+        let resolvedAnimeId = currentAnime.id;
+        try {
+            const vSearch = await fetch(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`);
+            const vJson = await vSearch.json();
+            const matches = vJson.data || vJson.results || vJson || [];
+            if (matches.length > 0) {
+              const exactMatch = matches.find(m => m.title.toLowerCase() === currentAnime.title.toLowerCase()) || matches[0];
+              resolvedAnimeId = exactMatch.id;
+            }
+        } catch(e) {}
 
-        // B. Fetch Alternates / Relations from AniList
+        // B. Fetch Episodes using the resolved Vercel ID
+        const checkUpcoming = currentAnime.status?.toUpperCase() === 'UPCOMING' || currentAnime.status?.toUpperCase() === 'NOT_YET_RELEASED';
+        setIsUpcoming(checkUpcoming);
+
+        let tmdbBackdrop = currentAnime.backdrop || currentAnime.coverImage;
+
+        if (!checkUpcoming) {
+          try {
+            const episodesRes = await fetch(`${VERCEL_API_BASE}/api/episodes/${resolvedAnimeId}`);
+            const epJson = await episodesRes.json();
+            const epsList = epJson.data || epJson.episodes || epJson || [];
+            
+            const formattedEps = epsList.map((ep, idx) => ({
+              id: String(ep.id || idx + 1),
+              slug: String(ep.id || idx + 1), // Vercel slug for playback
+              epNumber: ep.number || ep.episode_no || idx + 1,
+              title: ep.title || `Episode ${ep.number || ep.episode_no || idx + 1}`,
+              desc: ep.description || 'No summary available for this episode.',
+              still: ep.image || tmdbBackdrop, 
+              duration: '24m'
+            }));
+            setEpisodes(formattedEps);
+          } catch(e) {
+            setEpisodes([]);
+          }
+        } else {
+          setEpisodes([]);
+        }
+
+        // C. Fetch TMDB Title Logo & Backdrop
+        const tmdbSearch = await fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(currentAnime.title)}`);
+        const tmdbJson = await tmdbSearch.json();
+        const tmdbShow = tmdbJson.results?.[0];
+
+        if (tmdbShow) {
+          if (tmdbShow.backdrop_path) tmdbBackdrop = `https://image.tmdb.org/t/p/original${tmdbShow.backdrop_path}`;
+          const imgRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbShow.id}/images?api_key=${TMDB_API_KEY}`);
+          const imgJson = await imgRes.json();
+          const logo = imgJson.logos?.find(l => l.iso_639_1 === 'en' || l.iso_639_1 === 'ja');
+          if (logo) setTitleLogo(`https://image.tmdb.org/t/p/w500${logo.file_path}`);
+        }
+
+        // D. Fetch Alternates / Relations from AniList
         const aniQuery = `
           query ($search: String) {
             Media (search: $search, type: ANIME) {
@@ -140,10 +182,10 @@ export default function Play({ anime, user, onBack, navigation }) {
           let matchedVercelId = null;
           
           try {
-            const vSearch = await fetch(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(altTitle)}`);
-            const vJson = await vSearch.json();
-            const matches = vJson.data || vJson.results || vJson || [];
-            if (matches.length > 0) matchedVercelId = matches[0].id;
+            const altSearch = await fetch(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(altTitle)}`);
+            const altJson = await altSearch.json();
+            const altMatches = altJson.data || altJson.results || altJson || [];
+            if (altMatches.length > 0) matchedVercelId = altMatches[0].id;
           } catch(e) {}
 
           return {
@@ -160,18 +202,6 @@ export default function Play({ anime, user, onBack, navigation }) {
 
         setAlternates(altList.filter(item => item.vercelId));
 
-        // C. Fetch TMDB Title Logo
-        const tmdbSearch = await fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(currentAnime.title)}`);
-        const tmdbJson = await tmdbSearch.json();
-        const tmdbShow = tmdbJson.results?.[0];
-
-        if (tmdbShow) {
-          const imgRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbShow.id}/images?api_key=${TMDB_API_KEY}`);
-          const imgJson = await imgRes.json();
-          const logo = imgJson.logos?.find(l => l.iso_639_1 === 'en' || l.iso_639_1 === 'ja');
-          if (logo) setTitleLogo(`https://image.tmdb.org/t/p/w500${logo.file_path}`);
-        }
-
       } catch (err) {
         console.error("Play page init error:", err);
       } finally {
@@ -180,38 +210,49 @@ export default function Play({ anime, user, onBack, navigation }) {
     };
 
     fetchAnimeDetails();
-  }, [currentAnime.id, currentAnime.title]);
+  }, [currentAnime.id, currentAnime.title, currentAnime.status]);
 
-  // 3. Handle Episode Play (Fetches M3U8 from Vercel API and opens Player)
-  const handlePlayEpisode = async (epNum) => {
+  // 3. Handle Episode Play (Uses API logic from info.js)
+  const handlePlayEpisode = async (episodeItem) => {
     try {
-      setLoadingEpisode(epNum);
-      const res = await fetch(`${VERCEL_API_BASE}/api/stream?id=${currentAnime.id}&ep=${epNum}&server=hd-1&type=sub`);
-      const json = await res.json();
-      const streamUrl = json.data?.m3u8 || json.m3u8;
+      setLoadingEpisode(episodeItem.epNumber);
+      
+      const targetServer = 'hd-1';
+      const targetType = 'sub';
+      const streamUrlAPI = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(episodeItem.slug)}&server=${targetServer}&type=${targetType}`;
+      
+      const response = await fetch(streamUrlAPI);
+      const json = await response.json();
 
-      if (streamUrl) {
+      let verifiedStreamData = null;
+      if (json && json.success && (json.data?.m3u8 || json.results?.streamingLink)) {
+          verifiedStreamData = json.data || json.results;
+      } else {
+          // Fallback logic
+          const fallbackUrl = `${VERCEL_API_BASE}/api/stream/fallback?id=${encodeURIComponent(episodeItem.slug)}&server=${targetServer}&type=${targetType}`;
+          const fbResponse = await fetch(fallbackUrl);
+          const fbJson = await fbResponse.json();
+          if (fbJson && fbJson.success && (fbJson.data?.m3u8 || fbJson.results?.streamingLink)) {
+              verifiedStreamData = fbJson.data || fbJson.results;
+          }
+      }
+
+      if (verifiedStreamData && verifiedStreamData.m3u8) {
         navigation.navigate('Player', {
-          streamUrl,
+          streamUrl: verifiedStreamData.m3u8,
           animeTitle: currentAnime.title,
-          episodeNum: epNum,
-          episodeTitle: episodes.find(e => e.epNumber === epNum)?.title || `Episode ${epNum}`
+          episodeNum: episodeItem.epNumber,
+          episodeTitle: episodeItem.title
         });
       } else {
-        alert("Streaming link currently unavailable for this episode.");
+        alert("Sources are caching on host mirrors. Try another server!");
       }
-    } catch (e) {
+    } catch (error) {
       alert("Failed to connect to streaming server.");
     } finally {
       setLoadingEpisode(null);
     }
   };
-
-  const headerBackgroundColor = scrollY.interpolate({
-    inputRange: [0, 250],
-    outputRange: ['rgba(0,0,0,0)', 'rgba(0,0,0,0.95)'],
-    extrapolate: 'clamp',
-  });
 
   const renderHeader = () => (
     <View style={styles.heroContainer}>
@@ -247,21 +288,31 @@ export default function Play({ anime, user, onBack, navigation }) {
 
         {/* METADATA ROW */}
         <View style={styles.inlineMetaRow}>
-          <View style={styles.newBadge}><Text style={styles.newBadgeText}>New Episode</Text></View>
+          {isUpcoming ? (
+            <View style={styles.upcomingBadge}><Text style={styles.upcomingBadgeText}>UPCOMING</Text></View>
+          ) : (
+            <View style={styles.newBadge}><Text style={styles.newBadgeText}>New Episode</Text></View>
+          )}
           <View style={styles.ratingBadge}><Text style={styles.ratingText}>{currentAnime.rating || 'U/A 16+'}</Text></View>
           <Text style={styles.metaScore}>★ {currentAnime.score || 85}%</Text>
         </View>
 
         {/* MASSIVE PLAY BUTTON */}
         <TouchableOpacity 
-          style={styles.playButton} 
+          style={[styles.playButton, episodes.length === 0 && { opacity: 0.5 }]} 
           activeOpacity={0.85}
-          onPress={() => handlePlayEpisode(userProgress.episodeNum || 1)}
+          onPress={() => {
+            if(episodes.length > 0) {
+               const targetEp = episodes.find(e => e.epNumber === userProgress.episodeNum) || episodes[0];
+               handlePlayEpisode(targetEp);
+            }
+          }}
+          disabled={episodes.length === 0}
         >
           <Text style={styles.playButtonText}>
-            {userProgress.episodeNum ? `Resume Episode ${userProgress.episodeNum}` : 'Watch Now'}
+            {episodes.length === 0 ? 'Not Yet Released' : (userProgress.episodeNum ? `Resume Episode ${userProgress.episodeNum}` : 'Watch Now')}
           </Text>
-          <IconPlay size={18} color="#000" />
+          {episodes.length > 0 && <IconPlay size={18} color="#000" />}
         </TouchableOpacity>
 
         {/* ACTION ICONS (Watchlist, Download, Share) */}
@@ -321,8 +372,19 @@ export default function Play({ anime, user, onBack, navigation }) {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent={true} />
 
-      {/* FLOATING TOP NAV */}
-      <Animated.View style={[styles.topNav, { backgroundColor: headerBackgroundColor }]}>
+      {/* TOP NAV: Clean Gradient without padding blocking the art */}
+      <Animated.View style={styles.topNav}>
+        <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
+          <Defs>
+            <LinearGradient id="topNavGradient" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor="#000000" stopOpacity="0.8" />
+              <Stop offset="0.6" stopColor="#000000" stopOpacity="0.3" />
+              <Stop offset="1" stopColor="#000000" stopOpacity="0" />
+            </LinearGradient>
+          </Defs>
+          <Rect width="100%" height="100%" fill="url(#topNavGradient)" />
+        </Svg>
+
         <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => navigation?.goBack())}>
           <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5"><Path d="M15 18l-6-6 6-6" /></Svg>
         </TouchableOpacity>
@@ -335,6 +397,15 @@ export default function Play({ anime, user, onBack, navigation }) {
           data={activeTab === 'episodes' ? episodes : alternates}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={renderHeader}
+          ListEmptyComponent={() => (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>
+                {activeTab === 'episodes' 
+                  ? (isUpcoming ? 'This series is upcoming and has not released any episodes yet.' : 'No episodes found for this series.')
+                  : 'No related media found.'}
+              </Text>
+            </View>
+          )}
           renderItem={({ item }) => {
             if (activeTab === 'episodes') {
               const isLoadingThis = loadingEpisode === item.epNumber;
@@ -342,7 +413,7 @@ export default function Play({ anime, user, onBack, navigation }) {
                 <TouchableOpacity 
                   style={styles.epCard} 
                   activeOpacity={0.8}
-                  onPress={() => handlePlayEpisode(item.epNumber)}
+                  onPress={() => handlePlayEpisode(item)}
                 >
                   <View style={styles.epTopRow}>
                     <View style={styles.epImageWrapper}>
@@ -394,8 +465,10 @@ export default function Play({ anime, user, onBack, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#050505' },
   loaderCenter: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  topNav: { position: 'absolute', top: 0, left: 0, right: 0, height: 85, paddingTop: 38, paddingHorizontal: 16, zIndex: 100, flexDirection: 'row', alignItems: 'center' },
-  navBackBtn: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20 },
+  
+  // TOP NAV WITH GRADIENT BACKGROUND
+  topNav: { position: 'absolute', top: 0, left: 0, right: 0, height: 100, zIndex: 100, paddingTop: 38, paddingHorizontal: 16 },
+  navBackBtn: { padding: 8, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 20, alignSelf: 'flex-start' },
   
   heroContainer: { width: '100%' },
   
@@ -414,6 +487,8 @@ const styles = StyleSheet.create({
   inlineMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 20 },
   newBadge: { backgroundColor: BRAND_RED, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
   newBadgeText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
+  upcomingBadge: { backgroundColor: '#FF8C00', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
+  upcomingBadgeText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
   ratingBadge: { backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
   ratingText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
   metaScore: { color: '#CCC', fontSize: 12, fontWeight: 'bold' },
@@ -458,5 +533,8 @@ const styles = StyleSheet.create({
   altBadge: { backgroundColor: 'rgba(229,9,20,0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start', marginBottom: 6, borderWidth: 1, borderColor: 'rgba(229,9,20,0.4)' },
   altBadgeText: { color: BRAND_RED, fontSize: 9, fontWeight: '900', textTransform: 'uppercase' },
   altTitle: { color: '#FFF', fontSize: 15, fontWeight: 'bold', marginBottom: 6 },
-  altSub: { color: '#888', fontSize: 12, fontWeight: '600' }
+  altSub: { color: '#888', fontSize: 12, fontWeight: '600' },
+  
+  emptyState: { paddingVertical: 40, alignItems: 'center' },
+  emptyStateText: { color: '#666', fontSize: 14, textAlign: 'center', paddingHorizontal: 40 }
 });
