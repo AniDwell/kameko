@@ -15,6 +15,20 @@ const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 const BRAND_RED = '#E50914';
 
+// --- Safe Fetch Helper to Prevent Infinite Hangs ---
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 4000) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return res;
+  } catch (err) {
+    clearTimeout(id);
+    throw err;
+  }
+};
+
 // --- CUSTOM SVG ICONS ---
 const IconPlay = ({ size = 15, color = "#FFFFFF" }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
@@ -40,7 +54,7 @@ const IconShare = ({ size = 16, color = "#FFFFFF" }) => (
   </Svg>
 );
 
-// --- UNIFIED SLIDER-STYLE SKELETON LOADER ---
+// --- SKELETON LOADER ---
 const CarouselSkeleton = () => {
   const shimmer = useRef(new Animated.Value(0.3)).current;
 
@@ -144,11 +158,11 @@ export default function Carousel({ user, onSelectAnime }) {
         const currentLib = new Set();
         snap?.forEach((doc) => currentLib.add(doc.id));
         setLibrarySet(currentLib);
-      });
+      }, () => {});
     return () => unsubscribe();
   }, [user]);
 
-  // 3. Metadata Engine: AniList + MAL + TMDB
+  // 3. Fast Metadata Engine
   useEffect(() => {
     let isMounted = true;
 
@@ -156,7 +170,7 @@ export default function Carousel({ user, onSelectAnime }) {
       try {
         const aniQuery = `
           query { 
-            Page(page: 1, perPage: 12) { 
+            Page(page: 1, perPage: 10) { 
               media(type: ANIME, sort: TRENDING_DESC, isAdult: false) { 
                 id
                 idMal
@@ -174,104 +188,113 @@ export default function Carousel({ user, onSelectAnime }) {
           }
         `;
 
-        const aniRes = await fetch('https://graphql.anilist.co', {
+        const aniRes = await fetchWithTimeout('https://graphql.anilist.co', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: aniQuery })
-        });
+        }, 5000);
+        
         const aniData = await aniRes.json();
         const aniListMedia = aniData?.data?.Page?.media || [];
 
-        const enriched = await Promise.all(
-          aniListMedia.map(async (anime) => {
-            const primaryTitle = anime.title.english || anime.title.romaji;
-            const romajiTitle = anime.title.romaji || primaryTitle;
-            let streamId = null;
-            let tmdbLogo = null;
-            let tmdbBackdrop = anime.bannerImage || anime.coverImage?.extraLarge;
-            let contentRating = 'U/A 13+';
-            let finalEpisodes = anime.episodes || 0;
-
-            try {
-              // Match with streaming catalog
-              const vercelRes = await fetch(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(primaryTitle)}`);
-              if (!vercelRes.ok) return null;
-
-              const vercelData = await vercelRes.json();
-              const apiResults = vercelData.data || vercelData.results || vercelData || [];
-              const matchedShow = apiResults.find((r) => {
-                const rt = (r.title || '').toLowerCase();
-                return rt === primaryTitle.toLowerCase() || rt === romajiTitle.toLowerCase();
-              }) || apiResults[0];
-
-              if (!matchedShow) return null;
-
-              streamId = matchedShow.id;
-              finalEpisodes = matchedShow.episodes?.sub || matchedShow.episodes?.dub || matchedShow.episodeCount || matchedShow.episodes || finalEpisodes;
-
-              // TMDB Content Rating & Wordmark Logo
-              const tmdbSearch = await fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(primaryTitle)}`).catch(() => null);
-              if (tmdbSearch && tmdbSearch.ok) {
-                const tmdbJson = await tmdbSearch.json();
-                const tmdbItem = tmdbJson.results?.[0];
-
-                if (tmdbItem) {
-                  if (tmdbItem.backdrop_path) {
-                    tmdbBackdrop = `https://image.tmdb.org/t/p/original${tmdbItem.backdrop_path}`;
-                  }
-
-                  const [imgRes, ratingsRes] = await Promise.all([
-                    fetch(`https://api.themoviedb.org/3/tv/${tmdbItem.id}/images?api_key=${TMDB_API_KEY}`).catch(() => null),
-                    fetch(`https://api.themoviedb.org/3/tv/${tmdbItem.id}/content_ratings?api_key=${TMDB_API_KEY}`).catch(() => null)
-                  ]);
-
-                  if (imgRes && imgRes.ok) {
-                    const imgJson = await imgRes.json();
-                    const logoObj = imgJson.logos?.find((l) => l.iso_639_1 === 'en' || l.iso_639_1 === 'ja');
-                    if (logoObj) tmdbLogo = `https://image.tmdb.org/t/p/w500${logoObj.file_path}`;
-                  }
-
-                  if (ratingsRes && ratingsRes.ok) {
-                    const rateJson = await ratingsRes.json();
-                    const inRating = rateJson.results?.find((r) => r.iso_3166_1 === 'IN' || r.iso_3166_1 === 'US');
-                    if (inRating?.rating) contentRating = inRating.rating.toUpperCase();
-                  }
-                }
-              }
-            } catch {
-              return null;
-            }
-
-            return {
-              id: streamId,
-              malId: anime.idMal,
-              title: primaryTitle,
-              description: anime.description?.replace(/<[^>]*>?/gm, '').trim() || 'No synopsis available.',
-              score: anime.averageScore,
-              genres: anime.genres?.slice(0, 3) || ['Action', 'Anime'],
-              format: anime.format || 'TV',
-              episodes: finalEpisodes,
-              status: anime.status,
-              coverImage: anime.coverImage?.extraLarge || anime.coverImage?.large,
-              backdrop: tmdbBackdrop,
-              logo: tmdbLogo,
-              contentRating
-            };
-          })
-        );
+        // Instantly format with Fallback data so UI renders immediately
+        const fastSlides = aniListMedia.map((anime) => {
+          const primaryTitle = anime.title.english || anime.title.romaji || 'Unknown Anime';
+          return {
+            id: String(anime.id),
+            rawTitle: primaryTitle,
+            malId: anime.idMal,
+            title: primaryTitle,
+            description: anime.description?.replace(/<[^>]*>?/gm, '').trim() || 'No synopsis available.',
+            score: anime.averageScore,
+            genres: anime.genres?.slice(0, 3) || ['Action', 'Anime'],
+            format: anime.format || 'TV',
+            episodes: anime.episodes || 0,
+            status: anime.status,
+            coverImage: anime.coverImage?.extraLarge || anime.coverImage?.large,
+            backdrop: anime.bannerImage || anime.coverImage?.extraLarge,
+            logo: null,
+            contentRating: 'U/A 13+'
+          };
+        }).slice(0, 7);
 
         if (!isMounted) return;
 
-        const validSlides = enriched.filter(Boolean).slice(0, 7);
-        validSlides.forEach((_, i) => {
+        // Initialize Animations
+        fastSlides.forEach((_, i) => {
           fadeAnims[i] = new Animated.Value(i === 0 ? 1 : 0);
           scaleAnims[i] = new Animated.Value(i === 0 ? 1.05 : 1);
         });
 
-        setSlides(validSlides);
+        // Set state immediately to unblock UI
+        setSlides(fastSlides);
+        setLoading(false);
+
+        // --- BACKGROUND RESOLUTION FOR LOGOS & VERCEL IDs ---
+        // This won't block the UI if it's slow
+        const resolveBackgroundData = async () => {
+          const resolvedSlides = await Promise.all(
+            fastSlides.map(async (slide) => {
+              let streamId = slide.id;
+              let tmdbLogo = slide.logo;
+              let tmdbBackdrop = slide.backdrop;
+              let rating = slide.contentRating;
+
+              try {
+                // Vercel Resolution
+                const vRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(slide.rawTitle)}`, {}, 3000);
+                if (vRes.ok) {
+                  const vJson = await vRes.json();
+                  const matches = vJson.data || vJson.results || [];
+                  if (matches.length > 0) {
+                    const exact = matches.find(r => (r.title || '').toLowerCase() === slide.rawTitle.toLowerCase()) || matches[0];
+                    streamId = exact.id;
+                  }
+                }
+
+                // TMDB Resolution
+                const tSearch = await fetchWithTimeout(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(slide.rawTitle)}`, {}, 3000);
+                if (tSearch.ok) {
+                  const tJson = await tSearch.json();
+                  const tmdbItem = tJson.results?.[0];
+                  
+                  if (tmdbItem) {
+                    if (tmdbItem.backdrop_path) tmdbBackdrop = `https://image.tmdb.org/t/p/original${tmdbItem.backdrop_path}`;
+                    
+                    const imgRes = await fetchWithTimeout(`https://api.themoviedb.org/3/tv/${tmdbItem.id}/images?api_key=${TMDB_API_KEY}`, {}, 3000);
+                    if (imgRes.ok) {
+                      const imgJson = await imgRes.json();
+                      const logoObj = imgJson.logos?.find(l => l.iso_639_1 === 'en' || l.iso_639_1 === 'ja');
+                      if (logoObj) tmdbLogo = `https://image.tmdb.org/t/p/w500${logoObj.file_path}`;
+                    }
+
+                    const rateRes = await fetchWithTimeout(`https://api.themoviedb.org/3/tv/${tmdbItem.id}/content_ratings?api_key=${TMDB_API_KEY}`, {}, 3000);
+                    if (rateRes.ok) {
+                      const rateJson = await rateRes.json();
+                      const inRating = rateJson.results?.find(r => r.iso_3166_1 === 'IN' || r.iso_3166_1 === 'US');
+                      if (inRating?.rating) rating = inRating.rating.toUpperCase();
+                    }
+                  }
+                }
+              } catch (_) {}
+
+              return {
+                ...slide,
+                id: streamId,
+                backdrop: tmdbBackdrop,
+                logo: tmdbLogo,
+                contentRating: rating
+              };
+            })
+          );
+          
+          if (isMounted) setSlides(resolvedSlides);
+        };
+
+        resolveBackgroundData();
+
       } catch (err) {
-        console.error('Carousel data load error:', err);
-      } finally {
+        console.error('Carousel network error:', err);
         if (isMounted) setLoading(false);
       }
     };
@@ -292,7 +315,8 @@ export default function Carousel({ user, onSelectAnime }) {
   }, [currentIndex, slides]);
 
   const transitionSlide = (fromIdx, toIdx) => {
-    scaleAnims[toIdx]?.setValue(1);
+    if (!scaleAnims[toIdx] || !fadeAnims[fromIdx]) return;
+    scaleAnims[toIdx].setValue(1);
     Animated.parallel([
       Animated.timing(fadeAnims[fromIdx], { toValue: 0, duration: 750, useNativeDriver: true }),
       Animated.timing(fadeAnims[toIdx], { toValue: 1, duration: 750, useNativeDriver: true }),
@@ -325,7 +349,7 @@ export default function Carousel({ user, onSelectAnime }) {
     if (!user) return;
     const ref = firestore().collection('users').doc(user.uid).collection('library').doc(anime.id);
     if (librarySet.has(anime.id)) {
-      await ref.delete();
+      await ref.delete().catch(()=>console.log("Delete failed"));
     } else {
       await ref.set({
         id: anime.id,
@@ -333,7 +357,7 @@ export default function Carousel({ user, onSelectAnime }) {
         title: anime.title,
         img: anime.coverImage || anime.backdrop,
         addedAt: firestore.FieldValue.serverTimestamp()
-      });
+      }).catch(()=>console.log("Save failed"));
     }
   };
 
@@ -363,7 +387,7 @@ export default function Carousel({ user, onSelectAnime }) {
       <View style={StyleSheet.absoluteFillObject}>
         {slides.map((slide, i) => (
           <Animated.View
-            key={`slide-bg-${slide.id}`}
+            key={`slide-bg-${slide.id}-${i}`}
             style={[
               styles.slideWrapper,
               { opacity: fadeAnims[i], zIndex: currentIndex === i ? 2 : 1 }
@@ -404,7 +428,7 @@ export default function Carousel({ user, onSelectAnime }) {
       {/* Foreground Content */}
       {slides.map((slide, i) => (
         <Animated.View
-          key={`slide-meta-${slide.id}`}
+          key={`slide-meta-${slide.id}-${i}`}
           pointerEvents={currentIndex === i ? 'box-none' : 'none'}
           style={[
             styles.uiContainer,
