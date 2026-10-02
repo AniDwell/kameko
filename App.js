@@ -9,7 +9,9 @@ import Home from './pages/home';
 export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
+  
   const [activeProfile, setActiveProfile] = useState(null);
+  const [previousProfile, setPreviousProfile] = useState(null); // REMEMBERS PROFILE FOR BACK BUTTON
   
   const [isAnimating, setIsAnimating] = useState(false);
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -27,6 +29,7 @@ export default function App() {
   const handleProfileSelect = (profile) => {
     setIsAnimating(true);
     setActiveProfile(profile);
+    setPreviousProfile(null); // Clear history once they are logged in
 
     Animated.parallel([
       Animated.timing(scaleAnim, { toValue: 4, duration: 700, easing: Easing.out(Easing.exp), useNativeDriver: true }),
@@ -36,6 +39,12 @@ export default function App() {
       scaleAnim.setValue(1);
       opacityAnim.setValue(1);
     });
+  };
+
+  // Triggered when user clicks the avatar in home.js
+  const handleSwitchProfile = () => {
+    setPreviousProfile(activeProfile); // Save current profile
+    setActiveProfile(null); // Triggers the Profiles screen overlay
   };
 
   if (initializing) {
@@ -58,7 +67,7 @@ export default function App() {
             <Home 
               user={user} 
               activeProfile={activeProfile} 
-              onSwitchProfile={() => setActiveProfile(null)} 
+              onSwitchProfile={handleSwitchProfile} 
             />
           )}
 
@@ -69,7 +78,11 @@ export default function App() {
                 isAnimating && { opacity: opacityAnim, transform: [{ scale: scaleAnim }] }
               ]}
             >
-              <Profiles user={user} onSelectProfile={handleProfileSelect} />
+              <Profiles 
+                user={user} 
+                onSelectProfile={handleProfileSelect} 
+                onHardwareBack={previousProfile ? () => setActiveProfile(previousProfile) : null} 
+              />
             </Animated.View>
           )}
         </View>
