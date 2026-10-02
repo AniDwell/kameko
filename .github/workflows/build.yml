@@ -20,8 +20,13 @@ jobs:
         with:
           node-version: '18'
 
+      # INSTALL DEPENDENCIES SAFELY
+      # We use standard npm install for JS packages, and npx expo install for native modules
+      # This prevents Gradle from pulling incompatible Android versions.
       - name: Install dependencies
-        run: npm install
+        run: |
+          npm install
+          npx expo install expo-file-system expo-crypto
 
       - name: Generate Android project
         run: npx expo prebuild --platform android --clean
@@ -32,6 +37,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # RETRIEVE THE EXACT SAME KEYSTORE FOR FIREBASE AUTHENTICATION
       - name: Cache Keystore
         uses: actions/cache@v4
         id: keystore-cache
@@ -49,6 +55,7 @@ jobs:
         working-directory: android
         run: chmod +x gradlew
 
+      # INJECT THE KEYSTORE TO CREATE A FULLY SIGNED RELEASE APK
       - name: Build Android Release APK
         working-directory: android
         env:
