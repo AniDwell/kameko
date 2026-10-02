@@ -77,22 +77,6 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
   return (
     <View style={styles.container}>
       
-      {/* FIXED HEADER: Safely sized to prevent layout crashes */}
-      <View style={styles.header}>
-        <Image 
-          source={require('../assets/kameko_header.png')} 
-          style={styles.headerLogoImage}
-          resizeMode="contain"
-        />
-        
-        <TouchableOpacity onPress={onSwitchProfile} style={styles.profileSwitcher} activeOpacity={0.8}>
-          <Image 
-            source={AVATARS[activeProfile?.avatar || 'pfp1.jpg']} 
-            style={styles.headerAvatar} 
-          />
-        </TouchableOpacity>
-      </View>
-
       <ScrollView 
         showsVerticalScrollIndicator={false} 
         style={styles.scroll}
@@ -110,36 +94,56 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
         <View style={{ height: 40 }} />
       </ScrollView>
 
+      {/* FLOATING HEADER IN AIR (Transparent overlay, no background padding) */}
+      <View style={styles.floatingHeader} pointerEvents="box-none">
+        <Image 
+          source={require('../assets/kameko_header.png')} 
+          style={styles.headerLogoImage}
+          resizeMode="contain"
+        />
+        
+        <TouchableOpacity onPress={onSwitchProfile} style={styles.profileSwitcher} activeOpacity={0.8}>
+          <Image 
+            source={AVATARS[activeProfile?.avatar || 'pfp1.jpg']} 
+            style={styles.headerAvatar} 
+          />
+        </TouchableOpacity>
+      </View>
+
       {renderBottomNav()}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#050505' },
-  header: { 
+  container: { flex: 1, backgroundColor: '#000000' },
+  floatingHeader: { 
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     alignItems: 'center', 
     paddingHorizontal: 20, 
-    paddingVertical: 12,
+    paddingTop: 46, // Safe top padding floating above carousel
+    paddingBottom: 15,
     zIndex: 100,
-    backgroundColor: '#000000',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.05)'
+    backgroundColor: 'transparent' // Completely transparent background
   },
   headerLogoImage: { 
-    width: 130, 
-    height: 35, 
-    tintColor: '#E50914' // Optional: ensures brand alignment if it's a monochrome asset, remove if full color
+    width: 155, // Slightly bigger as requested
+    height: 42, // Slightly bigger as requested
+    tintColor: '#E50914'
   },
   profileSwitcher: { 
     borderWidth: 1.5, 
-    borderColor: 'rgba(255,255,255,0.2)', 
-    borderRadius: 4, 
-    overflow: 'hidden' 
+    borderColor: 'rgba(255,255,255,0.25)', 
+    borderRadius: 6, 
+    overflow: 'hidden',
+    backgroundColor: 'rgba(0,0,0,0.4)' 
   },
-  headerAvatar: { width: 34, height: 34, borderRadius: 4 },
+  headerAvatar: { width: 38, height: 38, borderRadius: 5 },
   scroll: { flex: 1 },
   contentPadding: { paddingTop: 10 },
   rowContainer: { marginBottom: 25 },
