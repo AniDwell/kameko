@@ -1,20 +1,18 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
   View, Text, Image, StyleSheet, FlatList, 
   TouchableOpacity, ActivityIndicator 
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
-import { useNavigation } from '@react-navigation/native';
 
 const BRAND_RED = '#E50914';
 
-export default function TrendingSlider({ user }) {
-  const navigation = useNavigation();
+export default function TrendingSlider({ user, onSelectAnime }) {
   const [trendingList, setTrendingList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [librarySet, setLibrarySet] = useState(new Set());
 
-  // 1. Live Sync with Firestore Library
   useEffect(() => {
     if (!user) return;
     const unsubscribe = firestore()
@@ -29,7 +27,6 @@ export default function TrendingSlider({ user }) {
     return () => unsubscribe();
   }, [user]);
 
-  // 2. Fetch Trending from AniList -> Verify with Vercel API
   useEffect(() => {
     const fetchTrending = async () => {
       try {
@@ -37,16 +34,8 @@ export default function TrendingSlider({ user }) {
           query { 
             Page(page: 1, perPage: 25) { 
               media(type: ANIME, sort: TRENDING_DESC, isAdult: false) { 
-                id
-                title { romaji english }
-                coverImage { extraLarge }
-                bannerImage
-                description
-                genres
-                episodes
-                status
-                format
-                averageScore
+                id title { romaji english } coverImage { extraLarge }
+                bannerImage description genres episodes status format averageScore
               } 
             } 
           }
@@ -67,7 +56,6 @@ export default function TrendingSlider({ user }) {
           let streamId = null;
 
           try {
-            // STRICT VERIFICATION: Query your Vercel API
             const baseUrl = 'https://anikoto-api-lyart.vercel.app';
             const vercelRes = await fetch(`${baseUrl}/api/search?keyword=${encodeURIComponent(titleEng)}`);
             if (!vercelRes.ok) return null;
@@ -75,27 +63,24 @@ export default function TrendingSlider({ user }) {
             const vercelData = await vercelRes.json();
             const apiResults = vercelData.data || vercelData.results || vercelData || [];
             
-            // Try to match exact title
             const exactMatch = apiResults.find(r => {
               const rTitle = (r.title || '').toLowerCase();
               return rTitle === titleEng.toLowerCase() || rTitle === titleRom.toLowerCase();
             }) || apiResults[0];
 
-            // IF NOT FOUND IN API, IGNORE COMPLETELY
             if (!exactMatch) return null;
 
             streamId = exactMatch.id;
           } catch(e) {
-            console.log("Trending Slide verification error for:", titleEng);
-            return null; // Drop on error
+            return null;
           }
 
           return {
-            id: streamId, // Use exact streaming ID
+            id: streamId,
             title: titleEng,
             image: anime.coverImage?.extraLarge,
             backdrop: anime.bannerImage || anime.coverImage?.extraLarge,
-            description: anime.description?.replace(/<[^>]*>?/gm, '').trim() || 'No description available.',
+            description: anime.description?.replace(/<[^>]*>?/gm, '').trim() || 'No synopsis available.',
             genres: anime.genres || ['Anime'],
             score: anime.averageScore,
             episode: anime.episodes || '?',
@@ -104,7 +89,6 @@ export default function TrendingSlider({ user }) {
           };
         }));
 
-        // Filter out nulls and take the top 15 verified shows
         setTrendingList(verifiedTrending.filter(item => item !== null).slice(0, 15));
       } catch (error) {
         console.error("Trending Slider fetch error:", error);
@@ -117,8 +101,8 @@ export default function TrendingSlider({ user }) {
   }, []);
 
   const handleNavigateToPlay = (anime) => {
-    navigation.navigate('Play', { 
-      anime: {
+    if (onSelectAnime) {
+      onSelectAnime({ 
         id: anime.id,
         title: anime.title,
         coverImage: anime.image,
@@ -128,8 +112,8 @@ export default function TrendingSlider({ user }) {
         status: anime.status,
         score: anime.score,
         rating: 'U/A 13+'
-      } 
-    });
+      });
+    }
   };
 
   const toggleLibrary = async (anime) => {
