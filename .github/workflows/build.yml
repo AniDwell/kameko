@@ -20,11 +20,8 @@ jobs:
         with:
           node-version: '18'
 
-      # INSTALL DEPENDENCIES INCLUDING NAVIGATION & SVG
       - name: Install dependencies
-        run: |
-          npm install
-          npm install react-native-svg @react-navigation/native @react-navigation/stack react-native-screens react-native-safe-area-context
+        run: npm install
 
       - name: Generate Android project
         run: npx expo prebuild --platform android --clean
@@ -35,7 +32,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # RETRIEVE THE EXACT SAME KEYSTORE
       - name: Cache Keystore
         uses: actions/cache@v4
         id: keystore-cache
@@ -53,7 +49,6 @@ jobs:
         working-directory: android
         run: chmod +x gradlew
 
-      # INJECT THE KEYSTORE TO CREATE A FULLY SIGNED RELEASE APK
       - name: Build Android Release APK
         working-directory: android
         env:
