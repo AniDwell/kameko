@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   View, Text, Image, StyleSheet, Dimensions, 
-  TouchableOpacity, Animated, Share
+  TouchableOpacity, Animated 
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
@@ -36,11 +36,11 @@ const LogoWithSkeleton = ({ uri }) => {
       {!loaded && (
         <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#333333', borderRadius: 6, opacity: shimmerAnim }]} />
       )}
-      <Image 
+      <ProxyImage 
         source={{ uri }} 
         style={StyleSheet.absoluteFill} 
         resizeMode="contain" 
-        fadeDuration={300}
+        fadeDuration={0}
         onLoad={() => setLoaded(true)}
       />
     </View>
@@ -83,28 +83,12 @@ const CarouselSkeletonLayout = () => {
              <Animated.View style={{ width: 40, height: 18, backgroundColor: '#333', borderRadius: 4, opacity: shimmerAnim }} />
              <Animated.View style={{ width: 60, height: 18, backgroundColor: '#333', borderRadius: 4, opacity: shimmerAnim }} />
           </View>
-          <View style={styles.genreRow}>
-             <Animated.View style={{ width: 60, height: 20, backgroundColor: '#333', borderRadius: 12, opacity: shimmerAnim }} />
-             <Animated.View style={{ width: 70, height: 20, backgroundColor: '#333', borderRadius: 12, opacity: shimmerAnim }} />
-          </View>
-        </View>
-
-        <Animated.View style={{ width: '90%', height: 12, backgroundColor: '#333', borderRadius: 4, marginBottom: 8, opacity: shimmerAnim }} />
-        <Animated.View style={{ width: '75%', height: 12, backgroundColor: '#333', borderRadius: 4, marginBottom: 18, opacity: shimmerAnim }} />
-
-        <View style={styles.buttonRow}>
-          <Animated.View style={{ width: 100, height: 40, backgroundColor: '#333', borderRadius: 6, opacity: shimmerAnim }} />
-          <Animated.View style={{ width: 110, height: 40, backgroundColor: '#333', borderRadius: 6, opacity: shimmerAnim }} />
-          <Animated.View style={{ width: 40, height: 40, backgroundColor: '#333', borderRadius: 6, opacity: shimmerAnim }} />
         </View>
       </View>
     </View>
   );
 };
 
-// -------------------------------------------------------------
-// NOTICE: Removed React Navigation. We now use onSelectAnime.
-// -------------------------------------------------------------
 export default function Carousel({ user, onSelectAnime }) {
   const [slides, setSlides] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -112,7 +96,6 @@ export default function Carousel({ user, onSelectAnime }) {
   const [isNavigating, setIsNavigating] = useState(false);
   const [librarySet, setLibrarySet] = useState(new Set());
   
-  // Custom Share Sheet State
   const [shareData, setShareData] = useState({ visible: false, title: '', id: '' });
 
   const fadeAnims = useRef([]).current;
@@ -238,11 +221,6 @@ export default function Carousel({ user, onSelectAnime }) {
 
         const validSlides = enrichedSlides.filter(s => s !== null).slice(0, 7);
 
-        validSlides.forEach((s) => {
-          if (s.backdrop) Image.prefetch(s.backdrop).catch(() => {});
-          if (s.logo) Image.prefetch(s.logo).catch(() => {});
-        });
-
         validSlides.forEach((_, i) => {
           fadeAnims[i] = new Animated.Value(i === 0 ? 1 : 0);
           scaleAnims[i] = new Animated.Value(i === 0 ? 1.05 : 1);
@@ -305,14 +283,7 @@ export default function Carousel({ user, onSelectAnime }) {
     else await ref.set({ id: anime.id, title: anime.title, img: anime.coverImage || anime.backdrop, addedAt: firestore.FieldValue.serverTimestamp() });
   };
 
-  const openShareSheet = (anime) => {
-    setShareData({ visible: true, title: anime.title, id: anime.id });
-  };
-
-  if (loading) {
-    return <CarouselSkeletonLayout />;
-  }
-
+  if (loading) return <CarouselSkeletonLayout />;
   if (slides.length === 0) return null;
 
   return (
@@ -401,7 +372,7 @@ export default function Carousel({ user, onSelectAnime }) {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.iconButton} onPress={() => openShareSheet(slide)} activeOpacity={0.8}>
+            <TouchableOpacity style={styles.iconButton} onPress={() => setShareData({ visible: true, title: slide.title, id: slide.id })} activeOpacity={0.8}>
               <Text style={styles.iconButtonText}>➦</Text>
             </TouchableOpacity>
           </View>
