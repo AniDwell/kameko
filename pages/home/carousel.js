@@ -5,14 +5,11 @@ import {
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect } from 'react-native-svg';
-import { useNavigation } from '@react-navigation/native';
 
 const { width } = Dimensions.get('window');
 const HEIGHT = 520;
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const BRAND_RED = '#E50914';
-
-// --- CUSTOM SKELETON COMPONENTS ---
 
 const LogoWithSkeleton = ({ uri }) => {
   const [loaded, setLoaded] = useState(false);
@@ -63,7 +60,6 @@ const CarouselSkeletonLayout = () => {
     <View style={styles.container}>
       <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#1A1A1A', opacity: shimmerAnim }]} />
       
-      {/* Permanent Gradient over the skeleton background */}
       <Svg height="100%" width="100%" style={styles.permanentGradient}>
         <Defs>
           <LinearGradient id="heroGradient" x1="0" y1="1" x2="0" y2="0">
@@ -103,10 +99,7 @@ const CarouselSkeletonLayout = () => {
   );
 };
 
-// --- MAIN CAROUSEL COMPONENT ---
-
-export default function Carousel({ user }) {
-  const navigation = useNavigation();
+export default function Carousel({ user, onSelectAnime }) {
   const [slides, setSlides] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -117,7 +110,6 @@ export default function Carousel({ user }) {
   const scaleAnims = useRef([]).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
 
-  // 1. Navigation Loading Bar Animation
   useEffect(() => {
     if (isNavigating) {
       progressAnim.setValue(0);
@@ -138,7 +130,6 @@ export default function Carousel({ user }) {
     outputRange: ['0%', '100%'],
   });
 
-  // 2. Live Sync with Firestore Library
   useEffect(() => {
     if (!user) return;
     const unsubscribe = firestore()
@@ -153,7 +144,6 @@ export default function Carousel({ user }) {
     return () => unsubscribe();
   }, [user]);
 
-  // 3. Fetch AniList -> Verify -> TMDB Enrichment
   useEffect(() => {
     const fetchCarouselData = async () => {
       try {
@@ -239,7 +229,6 @@ export default function Carousel({ user }) {
 
         const validSlides = enrichedSlides.filter(s => s !== null).slice(0, 7);
 
-        // Instant Prefetch
         validSlides.forEach((s) => {
           if (s.backdrop) Image.prefetch(s.backdrop).catch(() => {});
           if (s.logo) Image.prefetch(s.logo).catch(() => {});
@@ -261,7 +250,6 @@ export default function Carousel({ user }) {
     fetchCarouselData();
   }, []);
 
-  // 4. Smooth Auto-Rotation
   useEffect(() => {
     if (slides.length === 0) return;
     const interval = setInterval(() => {
@@ -282,17 +270,23 @@ export default function Carousel({ user }) {
   };
 
   const handleNavigateToPlay = (animeData) => {
-    setIsNavigating(true); // Trigger the red loading bar
+    setIsNavigating(true);
     setTimeout(() => {
-      navigation.navigate('Play', { 
-        anime: {
-          id: animeData.id, title: animeData.title, coverImage: animeData.coverImage, backdrop: animeData.backdrop,
-          description: animeData.description, genres: animeData.genres, status: animeData.status,
-          score: animeData.score || 'N/A', rating: animeData.contentRating
-        } 
-      });
-      setIsNavigating(false); // Stop loader after navigation
-    }, 500); 
+      if (onSelectAnime) {
+        onSelectAnime({
+          id: animeData.id, 
+          title: animeData.title, 
+          coverImage: animeData.coverImage, 
+          backdrop: animeData.backdrop,
+          description: animeData.description, 
+          genres: animeData.genres, 
+          status: animeData.status,
+          score: animeData.score || 'N/A', 
+          rating: animeData.contentRating
+        });
+      }
+      setIsNavigating(false);
+    }, 400); 
   };
 
   const toggleLibrary = async (anime) => {
@@ -310,31 +304,26 @@ export default function Carousel({ user }) {
 
   return (
     <View style={styles.container}>
-      
-      {/* Dynamic Red Loading Bar for Navigation */}
       {isNavigating && (
         <View style={styles.progressBarBg}>
           <Animated.View style={[styles.progressBarFill, { width: progressBarWidth }]} />
         </View>
       )}
 
-      {/* LAYER 1: BACKDROP IMAGES CROSS-FADING */}
       <View style={StyleSheet.absoluteFillObject}>
         {slides.map((slide, i) => (
           <Animated.View key={slide.id} style={[styles.slideWrapper, { opacity: fadeAnims[i], zIndex: currentIndex === i ? 2 : 1 }]}>
-            {/* Shimmer skeleton specifically for slow backdrop loads */}
             <View style={[StyleSheet.absoluteFill, { backgroundColor: '#1A1A1A' }]} />
             <Animated.Image 
               source={{ uri: slide.backdrop }} 
               style={[styles.backdrop, { transform: [{ scale: scaleAnims[i] }] }]} 
               resizeMode="cover"
-              fadeDuration={0} // Instant snap
+              fadeDuration={0}
             />
           </Animated.View>
         ))}
       </View>
 
-      {/* LAYER 2: PERMANENT DARK GRADIENT (NEVER BLINKS) */}
       <Svg height="100%" width="100%" style={styles.permanentGradient} pointerEvents="none">
         <Defs>
           <LinearGradient id="heroGradient" x1="0" y1="1" x2="0" y2="0">
@@ -347,10 +336,8 @@ export default function Carousel({ user }) {
         <Rect width="100%" height="100%" fill="url(#heroGradient)" />
       </Svg>
 
-      {/* LAYER 3: CLICKABLE SURFACE */}
       <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => handleNavigateToPlay(slides[currentIndex])} />
 
-      {/* LAYER 4: FOREGROUND UI CONTENT */}
       {slides.map((slide, i) => (
         <Animated.View 
           key={`ui-${slide.id}`} 
@@ -400,7 +387,6 @@ export default function Carousel({ user }) {
         </Animated.View>
       ))}
 
-      {/* LAYER 5: PAGINATION DOTS */}
       <View style={styles.paginationContainer}>
         {slides.map((_, i) => (
           <TouchableOpacity 
