@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   View, Text, Image, StyleSheet, Dimensions, 
   TouchableOpacity, Animated, Share, StatusBar, 
-  ActivityIndicator, Modal, FlatList 
+  ActivityIndicator, Modal 
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
@@ -12,7 +12,6 @@ const BRAND_RED = '#E50914';
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
-// --- CUSTOM SVG ICONS ---
 const IconPlay = ({ size = 20, color = "#000" }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>
 );
@@ -37,7 +36,6 @@ const IconClock = ({ size = 18, color = BRAND_RED }) => (
   </Svg>
 );
 
-// --- TICKING COUNTDOWN COMPONENT ---
 const CountdownFooter = ({ targetAirDate, nextEpNumber }) => {
   const [timeLeft, setTimeLeft] = useState({ days: 0, hours: 0, mins: 0, secs: 0 });
 
@@ -83,8 +81,8 @@ const CountdownFooter = ({ targetAirDate, nextEpNumber }) => {
   );
 };
 
-export default function Play({ route, user, navigation }) {
-  const anime = route?.params?.anime || {
+export default function Play({ anime, user, onBack }) {
+  const currentAnime = anime || {
     id: 'solo-leveling',
     title: 'Solo Leveling',
     backdrop: 'https://image.tmdb.org/t/p/original/vIgyYkXkg6NC2whRbYjBD7eb3Er.jpg',
@@ -101,57 +99,51 @@ export default function Play({ route, user, navigation }) {
   const [selectedSeason, setSelectedSeason] = useState(null);
   const [seasonModalVisible, setSeasonModalVisible] = useState(false);
   const [episodes, setEpisodes] = useState([]);
-  const [nextRelease, setNextRelease] = useState(null); // { airDate, epNumber }
+  const [nextRelease, setNextRelease] = useState(null);
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
-  // 1. Live Sync with Firestore Library
   useEffect(() => {
     if (!user) return;
-    const ref = firestore().collection('users').doc(user.uid).collection('library').doc(anime.id);
+    const ref = firestore().collection('users').doc(user.uid).collection('library').doc(currentAnime.id);
     const unsubscribe = ref.onSnapshot(doc => setInLibrary(doc.exists));
     return () => unsubscribe();
-  }, [user, anime.id]);
+  }, [user, currentAnime.id]);
 
   const toggleLibrary = async () => {
     if (!user) return;
-    const ref = firestore().collection('users').doc(user.uid).collection('library').doc(anime.id);
+    const ref = firestore().collection('users').doc(user.uid).collection('library').doc(currentAnime.id);
     if (inLibrary) {
       await ref.delete();
     } else {
-      await ref.set({ id: anime.id, title: anime.title, img: anime.coverImage, addedAt: firestore.FieldValue.serverTimestamp() });
+      await ref.set({ id: currentAnime.id, title: currentAnime.title, img: currentAnime.coverImage, addedAt: firestore.FieldValue.serverTimestamp() });
     }
   };
 
-  // 2. TMDB Seasons Discovery & Vercel API Cross-Verification
   useEffect(() => {
     const discoverSeasons = async () => {
       try {
         setLoading(true);
 
-        // Step A: Search TV series on TMDB
-        const searchRes = await fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(anime.title)}`);
+        const searchRes = await fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(currentAnime.title)}`);
         const searchData = await searchRes.json();
         const tmdbShow = searchData.results?.[0];
 
         if (!tmdbShow) {
-          // Fallback if not found on TMDB
-          setSeasons([{ name: 'Season 1', seasonNumber: 1, vercelId: anime.id }]);
-          setSelectedSeason({ name: 'Season 1', seasonNumber: 1, vercelId: anime.id });
+          setSeasons([{ name: 'Season 1', seasonNumber: 1, vercelId: currentAnime.id }]);
+          setSelectedSeason({ name: 'Season 1', seasonNumber: 1, vercelId: currentAnime.id });
           setLoading(false);
           return;
         }
 
-        // Step B: Get TV Details for all Seasons
         const showRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbShow.id}?api_key=${TMDB_API_KEY}`);
         const showData = await showRes.json();
         const tmdbSeasons = (showData.seasons || []).filter(s => s.season_number > 0);
 
-        // Step C: Verify Each Season Against Your Vercel API
         const verifiedSeasons = await Promise.all(tmdbSeasons.map(async (s) => {
           const searchKeyword = s.season_number === 1 
-            ? anime.title 
-            : `${anime.title} Season ${s.season_number}`;
+            ? currentAnime.title 
+            : `${currentAnime.title} Season ${s.season_number}`;
 
           try {
             const vercelRes = await fetch(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(searchKeyword)}`);
@@ -165,7 +157,7 @@ export default function Play({ route, user, navigation }) {
               name: s.name || `Season ${s.season_number}`,
               seasonNumber: s.season_number,
               tmdbShowId: tmdbShow.id,
-              vercelId: results[0].id // Target stream ID in Vercel API
+              vercelId: results[0].id
             };
           } catch (e) {
             return null;
@@ -178,8 +170,7 @@ export default function Play({ route, user, navigation }) {
           setSeasons(cleanSeasons);
           setSelectedSeason(cleanSeasons[0]);
         } else {
-          // If sub-seasons don't match naming, use root anime
-          const defaultSeason = { name: 'Season 1', seasonNumber: 1, tmdbShowId: tmdbShow.id, vercelId: anime.id };
+          const defaultSeason = { name: 'Season 1', seasonNumber: 1, tmdbShowId: tmdbShow.id, vercelId: currentAnime.id };
           setSeasons([defaultSeason]);
           setSelectedSeason(defaultSeason);
         }
@@ -191,9 +182,8 @@ export default function Play({ route, user, navigation }) {
     };
 
     discoverSeasons();
-  }, [anime.title]);
+  }, [currentAnime.title]);
 
-  // 3. Load Episodes & Check for Next Unreleased Episode
   useEffect(() => {
     if (!selectedSeason) return;
 
@@ -201,7 +191,7 @@ export default function Play({ route, user, navigation }) {
       try {
         if (!selectedSeason.tmdbShowId) {
           setEpisodes([
-            { id: '1', epNumber: 1, title: 'Episode 1', desc: anime.description, duration: '24m' }
+            { id: '1', epNumber: 1, title: 'Episode 1', desc: currentAnime.description, duration: '24m' }
           ]);
           return;
         }
@@ -229,7 +219,7 @@ export default function Play({ route, user, navigation }) {
               epNumber: ep.episode_number,
               title: ep.name || `Episode ${ep.episode_number}`,
               desc: ep.overview || 'No episode synopsis available.',
-              still: ep.still_path ? `https://image.tmdb.org/t/p/w500${ep.still_path}` : anime.backdrop,
+              still: ep.still_path ? `https://image.tmdb.org/t/p/w500${ep.still_path}` : currentAnime.backdrop,
               duration: ep.runtime ? `${ep.runtime}m` : '24m'
             });
           }
@@ -273,7 +263,7 @@ export default function Play({ route, user, navigation }) {
   const renderHeader = () => (
     <View style={styles.heroContainer}>
       <View style={styles.backdropWrapper}>
-        <Image source={{ uri: anime.backdrop }} style={styles.backdropImage} resizeMode="cover" />
+        <Image source={{ uri: currentAnime.backdrop }} style={styles.backdropImage} resizeMode="cover" />
         <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
           <Defs>
             <LinearGradient id="heroGradient" x1="0" y1="1" x2="0" y2="0">
@@ -288,14 +278,14 @@ export default function Play({ route, user, navigation }) {
 
       <View style={styles.heroContent}>
         <View style={styles.coverShadow}>
-          <Image source={{ uri: anime.coverImage }} style={styles.coverImage} />
+          <Image source={{ uri: currentAnime.coverImage }} style={styles.coverImage} />
         </View>
 
-        <Text style={styles.titleText}>{anime.title}</Text>
+        <Text style={styles.titleText}>{currentAnime.title}</Text>
 
         <View style={styles.metaRow}>
-          {anime.score ? <Text style={styles.metaScore}>{anime.score}% Score</Text> : null}
-          <View style={styles.ratingBadge}><Text style={styles.ratingText}>{anime.rating || 'U/A 13+'}</Text></View>
+          {currentAnime.score ? <Text style={styles.metaScore}>{currentAnime.score}% Score</Text> : null}
+          <View style={styles.ratingBadge}><Text style={styles.ratingText}>{currentAnime.rating || 'U/A 13+'}</Text></View>
           <Text style={styles.metaText}>{seasons.length} {seasons.length === 1 ? 'Season' : 'Seasons'}</Text>
         </View>
 
@@ -304,13 +294,13 @@ export default function Play({ route, user, navigation }) {
           <Text style={styles.playButtonText}>Play Episode 1</Text>
         </TouchableOpacity>
 
-        <Text style={styles.synopsisText} numberOfLines={4}>{anime.description}</Text>
+        <Text style={styles.synopsisText} numberOfLines={4}>{currentAnime.description}</Text>
 
         <View style={styles.genreRow}>
-          {anime.genres.map((g, idx) => (
+          {currentAnime.genres?.map((g, idx) => (
             <React.Fragment key={idx}>
               <Text style={styles.genreText}>{g}</Text>
-              {idx < anime.genres.length - 1 && <Text style={styles.genreDot}>•</Text>}
+              {idx < currentAnime.genres.length - 1 && <Text style={styles.genreDot}>•</Text>}
             </React.Fragment>
           ))}
         </View>
@@ -326,7 +316,7 @@ export default function Play({ route, user, navigation }) {
             <Text style={styles.actionText}>Download</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionBtn} onPress={() => Share.share({ message: `Watch ${anime.title} on Kameko!` })} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => Share.share({ message: `Watch ${currentAnime.title} on Kameko!` })} activeOpacity={0.7}>
             <IconShare />
             <Text style={styles.actionText}>Share</Text>
           </TouchableOpacity>
@@ -334,7 +324,6 @@ export default function Play({ route, user, navigation }) {
 
         <View style={styles.divider} />
 
-        {/* SEASONS DROPDOWN SELECTOR */}
         <TouchableOpacity 
           style={styles.seasonDropdown} 
           activeOpacity={0.8}
@@ -352,7 +341,7 @@ export default function Play({ route, user, navigation }) {
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent={true} />
 
       <Animated.View style={[styles.topNav, { backgroundColor: headerBackgroundColor }]}>
-        <TouchableOpacity style={styles.navBackBtn} onPress={() => navigation?.goBack()}>
+        <TouchableOpacity style={styles.navBackBtn} onPress={onBack}>
           <Svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5"><Path d="M15 18l-6-6 6-6" /></Svg>
         </TouchableOpacity>
       </Animated.View>
@@ -375,7 +364,6 @@ export default function Play({ route, user, navigation }) {
         />
       )}
 
-      {/* SEASONS SELECTION MODAL */}
       <Modal visible={seasonModalVisible} transparent={true} animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalSheet}>
@@ -446,8 +434,6 @@ const styles = StyleSheet.create({
   epDuration: { color: '#888', fontSize: 12 },
   dlBtn: { padding: 8 },
   epDesc: { color: '#999', fontSize: 12, lineHeight: 17 },
-
-  // COUNTDOWN FOOTER
   countdownContainer: { marginHorizontal: 20, marginTop: 15, marginBottom: 35, padding: 18, backgroundColor: '#111111', borderRadius: 12, borderWidth: 1, borderColor: '#262626', alignItems: 'center' },
   countdownHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
   countdownTitle: { color: BRAND_RED, fontSize: 12, fontWeight: '900', letterSpacing: 1.5 },
@@ -456,8 +442,6 @@ const styles = StyleSheet.create({
   timeNumber: { color: '#FFFFFF', fontSize: 24, fontWeight: '900' },
   timeLabel: { color: '#777', fontSize: 9, fontWeight: 'bold', marginTop: 2 },
   timeColon: { color: '#555', fontSize: 20, fontWeight: '900', marginBottom: 10 },
-
-  // MODAL STYLES
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' },
   modalSheet: { backgroundColor: '#141414', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 20, paddingBottom: 40 },
   modalBar: { width: 40, height: 4, backgroundColor: '#333', borderRadius: 2, alignSelf: 'center', marginBottom: 15 },
