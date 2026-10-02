@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, Dimensions, 
   TouchableOpacity, Animated, Share, StatusBar, 
-  ActivityIndicator 
+  ActivityIndicator, ScrollView
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
@@ -13,7 +13,21 @@ const BRAND_RED = '#E50914';
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
-// --- CUSTOM SVG ICONS ---
+// Helper: Network fetch with timeout so slow APIs never hang the app
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 6000) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return res;
+  } catch (err) {
+    clearTimeout(id);
+    throw err;
+  }
+};
+
+// --- SVG ICONS ---
 const IconPlay = ({ size = 18, color = "#000" }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>
 );
@@ -43,9 +57,8 @@ export default function Play({ anime, user, onBack, navigation }) {
     status: 'RELEASING'
   };
 
-  const [loading, setLoading] = useState(true);
-  const [inLibrary, setInLibrary] = useState(false);
   const [episodes, setEpisodes] = useState([]);
+  const [episodesLoading, setEpisodesLoading] = useState(true);
   const [alternates, setAlternates] = useState([]);
   const [activeTab, setActiveTab] = useState('episodes'); 
   
@@ -53,113 +66,160 @@ export default function Play({ anime, user, onBack, navigation }) {
   const [descExpanded, setDescExpanded] = useState(false);
   const [userProgress, setUserProgress] = useState({ episodeNum: 1 });
   const [loadingEpisode, setLoadingEpisode] = useState(null);
-  const [isUpcoming, setIsUpcoming] = useState(false);
+  const [isUpcoming, setIsUpcoming] = useState(
+    currentAnime.status?.toUpperCase() === 'UPCOMING' || currentAnime.status?.toUpperCase() === 'NOT_YET_RELEASED'
+  );
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
-  // 1. Sync Library & Progress from Firestore
+  // 1. Sync Library & Progress from Firestore safely
   useEffect(() => {
-    if (!user) return;
-    const libRef = firestore().collection('users').doc(user.uid).collection('library').doc(currentAnime.id);
-    const libUnsub = libRef.onSnapshot(doc => setInLibrary(doc.exists));
+    if (!user || !currentAnime?.id) return;
+    const animeDocId = String(currentAnime.id);
 
-    const progRef = firestore().collection('users').doc(user.uid).collection('progress').doc(currentAnime.id);
+    const libRef = firestore().collection('users').doc(user.uid).collection('library').doc(animeDocId);
+    const libUnsub = libRef.onSnapshot(doc => setInLibrary(doc?.exists || false), () => {});
+
+    const progRef = firestore().collection('users').doc(user.uid).collection('progress').doc(animeDocId);
     const progUnsub = progRef.onSnapshot(doc => {
-      if (doc.exists) setUserProgress(doc.data());
-    });
+      if (doc?.exists) setUserProgress(doc.data());
+    }, () => {});
 
     return () => {
       libUnsub();
       progUnsub();
     };
-  }, [user, currentAnime.id]);
+  }, [user, currentAnime?.id]);
+
+  const [inLibrary, setInLibrary] = useState(false);
 
   const toggleLibrary = async () => {
-    if (!user) return;
-    const ref = firestore().collection('users').doc(user.uid).collection('library').doc(currentAnime.id);
+    if (!user || !currentAnime?.id) return;
+    const ref = firestore().collection('users').doc(user.uid).collection('library').doc(String(currentAnime.id));
     if (inLibrary) {
-      await ref.delete();
+      await ref.delete().catch(() => {});
     } else {
       await ref.set({ 
-        id: currentAnime.id, 
+        id: String(currentAnime.id), 
         title: currentAnime.title, 
-        img: currentAnime.coverImage, 
+        img: currentAnime.coverImage || currentAnime.backdrop, 
         addedAt: firestore.FieldValue.serverTimestamp() 
-      });
+      }).catch(() => {});
     }
   };
 
-  // 2. Fetch Episodes from Vercel API & Alternates from AniList
+  // 2. Fetch Episodes (Targeted & Fast)
   useEffect(() => {
-    const fetchAnimeDetails = async () => {
-      try {
-        setLoading(true);
+    let isMounted = true;
 
-        // A. Resolve Anime on Vercel to get the correct episodes ID
-        let resolvedAnimeId = currentAnime.id;
-        try {
-            const vSearch = await fetch(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`);
-            const vJson = await vSearch.json();
-            const matches = vJson.data || vJson.results || vJson || [];
-            if (matches.length > 0) {
-              const exactMatch = matches.find(m => m.title.toLowerCase() === currentAnime.title.toLowerCase()) || matches[0];
-              resolvedAnimeId = exactMatch.id;
-            }
-        } catch(e) {}
+    const loadEpisodes = async () => {
+      setEpisodesLoading(true);
 
-        // B. Fetch Episodes using the resolved Vercel ID
-        const checkUpcoming = currentAnime.status?.toUpperCase() === 'UPCOMING' || currentAnime.status?.toUpperCase() === 'NOT_YET_RELEASED';
-        setIsUpcoming(checkUpcoming);
-
-        let tmdbBackdrop = currentAnime.backdrop || currentAnime.coverImage;
-
-        if (!checkUpcoming) {
-          try {
-            const episodesRes = await fetch(`${VERCEL_API_BASE}/api/episodes/${resolvedAnimeId}`);
-            const epJson = await episodesRes.json();
-            const epsList = epJson.data || epJson.episodes || epJson || [];
-            
-            const formattedEps = epsList.map((ep, idx) => ({
-              id: String(ep.id || idx + 1),
-              slug: String(ep.id || idx + 1), // Vercel slug for playback
-              epNumber: ep.number || ep.episode_no || idx + 1,
-              title: ep.title || `Episode ${ep.number || ep.episode_no || idx + 1}`,
-              desc: ep.description || 'No summary available for this episode.',
-              still: ep.image || tmdbBackdrop, 
-              duration: '24m'
-            }));
-            setEpisodes(formattedEps);
-          } catch(e) {
-            setEpisodes([]);
-          }
-        } else {
+      // Check upcoming status
+      if (currentAnime.status?.toUpperCase() === 'UPCOMING' || currentAnime.status?.toUpperCase() === 'NOT_YET_RELEASED') {
+        if (isMounted) {
+          setIsUpcoming(true);
           setEpisodes([]);
+          setEpisodesLoading(false);
+        }
+        return;
+      }
+
+      try {
+        let epData = [];
+        let targetId = currentAnime.id;
+
+        // Try direct call with currentAnime.id
+        if (targetId) {
+          try {
+            const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetId)}`, {}, 4000);
+            const json = await res.json();
+            const list = json?.data || json?.episodes || json?.results || (Array.isArray(json) ? json : []);
+            if (Array.isArray(list) && list.length > 0) epData = list;
+          } catch (_) {}
         }
 
-        // C. Fetch TMDB Title Logo & Backdrop
-        const tmdbSearch = await fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(currentAnime.title)}`);
-        const tmdbJson = await tmdbSearch.json();
-        const tmdbShow = tmdbJson.results?.[0];
+        // Fallback: search title to get proper slug if direct call had 0 episodes
+        if (epData.length === 0) {
+          try {
+            const sRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`, {}, 4000);
+            const sJson = await sRes.json();
+            const matches = sJson?.data || sJson?.results || (Array.isArray(sJson) ? sJson : []);
+            
+            if (matches.length > 0) {
+              const exact = matches.find(m => (m.title || '').toLowerCase() === currentAnime.title.toLowerCase()) || matches[0];
+              targetId = exact.id;
 
-        if (tmdbShow) {
-          if (tmdbShow.backdrop_path) tmdbBackdrop = `https://image.tmdb.org/t/p/original${tmdbShow.backdrop_path}`;
-          const imgRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbShow.id}/images?api_key=${TMDB_API_KEY}`);
+              const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetId)}`, {}, 4000);
+              const json = await res.json();
+              const list = json?.data || json?.episodes || json?.results || (Array.isArray(json) ? json : []);
+              if (Array.isArray(list)) epData = list;
+            }
+          } catch (_) {}
+        }
+
+        if (isMounted) {
+          const formatted = epData.map((ep, idx) => {
+            const epNum = ep.num ?? ep.episode_no ?? ep.number ?? ep.episode ?? (idx + 1);
+            return {
+              id: String(ep.id || idx + 1),
+              slug: String(ep.slug || ep.id || epNum),
+              epNumber: epNum,
+              title: ep.title || `Episode ${epNum}`,
+              desc: ep.description || ep.desc || 'No summary available for this episode.',
+              still: ep.image || ep.still || ep.thumbnail || currentAnime.backdrop || currentAnime.coverImage,
+              duration: ep.duration ? `${ep.duration}m` : '24m'
+            };
+          });
+          setEpisodes(formatted);
+          setIsUpcoming(formatted.length === 0 && currentAnime.status?.toUpperCase().includes('UPCOMING'));
+        }
+      } catch (err) {
+        if (isMounted) setEpisodes([]);
+      } finally {
+        if (isMounted) setEpisodesLoading(false);
+      }
+    };
+
+    loadEpisodes();
+    return () => { isMounted = false; };
+  }, [currentAnime.id, currentAnime.title]);
+
+  // 3. Background Metadata (TMDB Logo & AniList Alternates)
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadMeta = async () => {
+      // Fetch TMDB Logo
+      try {
+        const cleanTitle = currentAnime.title.replace(/\(Dub\)|\(Sub\)/gi, '').trim();
+        const tmdbRes = await fetchWithTimeout(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(cleanTitle)}`, {}, 4000);
+        const tmdbJson = await tmdbRes.json();
+        const show = tmdbJson?.results?.[0];
+
+        if (show && isMounted) {
+          const imgRes = await fetchWithTimeout(`https://api.themoviedb.org/3/tv/${show.id}/images?api_key=${TMDB_API_KEY}`, {}, 4000);
           const imgJson = await imgRes.json();
-          const logo = imgJson.logos?.find(l => l.iso_639_1 === 'en' || l.iso_639_1 === 'ja');
-          if (logo) setTitleLogo(`https://image.tmdb.org/t/p/w500${logo.file_path}`);
+          const logo = imgJson?.logos?.find(l => l.iso_639_1 === 'en' || l.iso_639_1 === 'ja');
+          if (logo && isMounted) {
+            setTitleLogo(`https://image.tmdb.org/t/p/w500${logo.file_path}`);
+          }
         }
+      } catch (_) {}
 
-        // D. Fetch Alternates / Relations from AniList
+      // Fetch AniList Alternates without blocking
+      try {
         const aniQuery = `
           query ($search: String) {
             Media (search: $search, type: ANIME) {
+              status
               relations {
                 edges {
                   relationType
                   node {
                     id
                     title { romaji english }
-                    coverImage { extraLarge }
+                    coverImage { extraLarge large }
                     format
                     seasonYear
                     averageScore
@@ -169,85 +229,76 @@ export default function Play({ anime, user, onBack, navigation }) {
             }
           }
         `;
-        const aniRes = await fetch('https://graphql.anilist.co', {
+        const aRes = await fetchWithTimeout('https://graphql.anilist.co', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: aniQuery, variables: { search: currentAnime.title } })
-        });
-        const aniJson = await aniRes.json();
-        const edges = aniJson?.data?.Media?.relations?.edges || [];
-        
-        const altList = await Promise.all(edges.map(async (edge) => {
-          const altTitle = edge.node.title.english || edge.node.title.romaji;
-          let matchedVercelId = null;
-          
-          try {
-            const altSearch = await fetch(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(altTitle)}`);
-            const altJson = await altSearch.json();
-            const altMatches = altJson.data || altJson.results || altJson || [];
-            if (altMatches.length > 0) matchedVercelId = altMatches[0].id;
-          } catch(e) {}
+        }, 4000);
+        const aJson = await aRes.json();
+        const media = aJson?.data?.Media;
 
-          return {
+        if (media?.status && isMounted) {
+          if (media.status === 'NOT_YET_RELEASED') setIsUpcoming(true);
+        }
+
+        const edges = media?.relations?.edges || [];
+        if (isMounted) {
+          const altList = edges.map((edge) => ({
             id: String(edge.node.id),
-            vercelId: matchedVercelId || edge.node.id,
-            title: altTitle,
-            coverImage: edge.node.coverImage?.extraLarge || currentAnime.coverImage,
-            relationType: edge.relationType,
+            title: edge.node.title?.english || edge.node.title?.romaji || 'Untitled',
+            coverImage: edge.node.coverImage?.extraLarge || edge.node.coverImage?.large,
+            relationType: edge.relationType || 'RELATED',
             format: edge.node.format || 'TV',
-            score: edge.node.averageScore || 'N/A',
+            score: edge.node.averageScore ? `★ ${edge.node.averageScore}%` : 'N/A',
             year: edge.node.seasonYear || 'N/A'
-          };
-        }));
-
-        setAlternates(altList.filter(item => item.vercelId));
-
-      } catch (err) {
-        console.error("Play page init error:", err);
-      } finally {
-        setLoading(false);
-      }
+          }));
+          setAlternates(altList);
+        }
+      } catch (_) {}
     };
 
-    fetchAnimeDetails();
-  }, [currentAnime.id, currentAnime.title, currentAnime.status]);
+    loadMeta();
+    return () => { isMounted = false; };
+  }, [currentAnime.title]);
 
-  // 3. Handle Episode Play (Uses API logic from info.js)
+  // 4. Handle Episode Stream Navigation
   const handlePlayEpisode = async (episodeItem) => {
     try {
       setLoadingEpisode(episodeItem.epNumber);
-      
+
       const targetServer = 'hd-1';
       const targetType = 'sub';
-      const streamUrlAPI = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(episodeItem.slug)}&server=${targetServer}&type=${targetType}`;
+      const streamUrl = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(episodeItem.slug)}&server=${targetServer}&type=${targetType}`;
       
-      const response = await fetch(streamUrlAPI);
-      const json = await response.json();
+      const res = await fetchWithTimeout(streamUrl, {}, 5000);
+      const json = await res.json();
 
-      let verifiedStreamData = null;
-      if (json && json.success && (json.data?.m3u8 || json.results?.streamingLink)) {
-          verifiedStreamData = json.data || json.results;
-      } else {
-          // Fallback logic
-          const fallbackUrl = `${VERCEL_API_BASE}/api/stream/fallback?id=${encodeURIComponent(episodeItem.slug)}&server=${targetServer}&type=${targetType}`;
-          const fbResponse = await fetch(fallbackUrl);
-          const fbJson = await fbResponse.json();
-          if (fbJson && fbJson.success && (fbJson.data?.m3u8 || fbJson.results?.streamingLink)) {
-              verifiedStreamData = fbJson.data || fbJson.results;
-          }
+      let streamManifest = (json?.success && (json.data?.m3u8 || json.results?.streamingLink)) 
+        ? (json.data || json.results) 
+        : null;
+
+      if (!streamManifest) {
+        // Fallback server
+        const fbRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/stream/fallback?id=${encodeURIComponent(episodeItem.slug)}&server=${targetServer}&type=${targetType}`, {}, 5000);
+        const fbJson = await fbRes.json();
+        if (fbJson?.success && (fbJson.data?.m3u8 || fbJson.results?.streamingLink)) {
+          streamManifest = fbJson.data || fbJson.results;
+        }
       }
 
-      if (verifiedStreamData && verifiedStreamData.m3u8) {
+      if (streamManifest?.m3u8) {
         navigation.navigate('Player', {
-          streamUrl: verifiedStreamData.m3u8,
+          streamUrl: streamManifest.m3u8,
           animeTitle: currentAnime.title,
           episodeNum: episodeItem.epNumber,
-          episodeTitle: episodeItem.title
+          episodeTitle: episodeItem.title,
+          animeId: currentAnime.id,
+          userUid: user?.uid
         });
       } else {
-        alert("Sources are caching on host mirrors. Try another server!");
+        alert("Sources are caching on host mirrors. Please try again shortly.");
       }
-    } catch (error) {
+    } catch (e) {
       alert("Failed to connect to streaming server.");
     } finally {
       setLoadingEpisode(null);
@@ -256,19 +307,18 @@ export default function Play({ anime, user, onBack, navigation }) {
 
   const renderHeader = () => (
     <View style={styles.heroContainer}>
-      
-      {/* MASSIVE VERTICAL POSTER BACKGROUND */}
+      {/* FULL POSTER BACKGROUND */}
       <View style={styles.backdropWrapper}>
-        <ProxyImage source={{ uri: currentAnime.coverImage }} style={styles.backdropImage} resizeMode="cover" />
+        <ProxyImage source={{ uri: currentAnime.coverImage || currentAnime.backdrop }} style={styles.backdropImage} resizeMode="cover" />
         
-        {/* Soft dark gradient fading into the black UI below */}
+        {/* Soft bottom dark gradient */}
         <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
           <Defs>
-            <LinearGradient id="heroGradient" x1="0" y1="1" x2="0" y2="0">
-              <Stop offset="0" stopColor="#050505" stopOpacity="1" />
-              <Stop offset="0.3" stopColor="#050505" stopOpacity="0.95" />
-              <Stop offset="0.6" stopColor="#050505" stopOpacity="0.4" />
-              <Stop offset="1" stopColor="#050505" stopOpacity="0.05" />
+            <LinearGradient id="heroGradient" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor="#050505" stopOpacity="0.05" />
+              <Stop offset="0.45" stopColor="#050505" stopOpacity="0.4" />
+              <Stop offset="0.75" stopColor="#050505" stopOpacity="0.9" />
+              <Stop offset="1" stopColor="#050505" stopOpacity="1" />
             </LinearGradient>
           </Defs>
           <Rect width="100%" height="100%" fill="url(#heroGradient)" />
@@ -276,8 +326,7 @@ export default function Play({ anime, user, onBack, navigation }) {
       </View>
 
       <View style={styles.heroContent}>
-        
-        {/* CENTERED TITLE LOGO */}
+        {/* TITLE LOGO OR TYPOGRAPHY */}
         <View style={styles.logoContainer}>
           {titleLogo ? (
             <ProxyImage source={{ uri: titleLogo }} style={styles.titleLogo} resizeMode="contain" />
@@ -297,25 +346,25 @@ export default function Play({ anime, user, onBack, navigation }) {
           <Text style={styles.metaScore}>★ {currentAnime.score || 85}%</Text>
         </View>
 
-        {/* MASSIVE PLAY BUTTON */}
+        {/* PRIMARY PLAY BUTTON */}
         <TouchableOpacity 
-          style={[styles.playButton, episodes.length === 0 && { opacity: 0.5 }]} 
+          style={[styles.playButton, (episodes.length === 0 || isUpcoming) && { opacity: 0.5 }]} 
           activeOpacity={0.85}
           onPress={() => {
-            if(episodes.length > 0) {
-               const targetEp = episodes.find(e => e.epNumber === userProgress.episodeNum) || episodes[0];
-               handlePlayEpisode(targetEp);
+            if (episodes.length > 0) {
+              const target = episodes.find(e => e.epNumber === userProgress.episodeNum) || episodes[0];
+              handlePlayEpisode(target);
             }
           }}
-          disabled={episodes.length === 0}
+          disabled={episodes.length === 0 || isUpcoming}
         >
           <Text style={styles.playButtonText}>
-            {episodes.length === 0 ? 'Not Yet Released' : (userProgress.episodeNum ? `Resume Episode ${userProgress.episodeNum}` : 'Watch Now')}
+            {isUpcoming ? 'Not Yet Released' : (userProgress.episodeNum ? `Resume Episode ${userProgress.episodeNum}` : 'Watch Now')}
           </Text>
-          {episodes.length > 0 && <IconPlay size={18} color="#000" />}
+          {!isUpcoming && episodes.length > 0 && <IconPlay size={18} color="#000" />}
         </TouchableOpacity>
 
-        {/* ACTION ICONS (Watchlist, Download, Share) */}
+        {/* ACTION ROW */}
         <View style={styles.actionsRow}>
           <TouchableOpacity style={styles.actionBtn} onPress={toggleLibrary} activeOpacity={0.7}>
             {inLibrary ? <IconCheck /> : <IconPlus />}
@@ -333,7 +382,7 @@ export default function Play({ anime, user, onBack, navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* SYNOPSIS WITH 'SEE MORE' */}
+        {/* SYNOPSIS WITH TOGGLE */}
         <View style={styles.synopsisContainer}>
           <Text style={styles.synopsisText} numberOfLines={descExpanded ? undefined : 3}>
             {currentAnime.description}
@@ -345,14 +394,16 @@ export default function Play({ anime, user, onBack, navigation }) {
           )}
         </View>
 
-        {/* TABS: EPISODES / ALTERNATES */}
+        {/* TABS */}
         <View style={styles.tabHeader}>
           <TouchableOpacity 
             style={[styles.tabBtn, activeTab === 'episodes' && styles.tabBtnActive]} 
             onPress={() => setActiveTab('episodes')}
             activeOpacity={0.8}
           >
-            <Text style={[styles.tabText, activeTab === 'episodes' && styles.tabTextActive]}>Episodes</Text>
+            <Text style={[styles.tabText, activeTab === 'episodes' && styles.tabTextActive]}>
+              Episodes {episodes.length > 0 ? `(${episodes.length})` : ''}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity 
@@ -360,10 +411,11 @@ export default function Play({ anime, user, onBack, navigation }) {
             onPress={() => setActiveTab('alternates')}
             activeOpacity={0.8}
           >
-            <Text style={[styles.tabText, activeTab === 'alternates' && styles.tabTextActive]}>Alternates</Text>
+            <Text style={[styles.tabText, activeTab === 'alternates' && styles.tabTextActive]}>
+              Alternates {alternates.length > 0 ? `(${alternates.length})` : ''}
+            </Text>
           </TouchableOpacity>
         </View>
-
       </View>
     </View>
   );
@@ -372,118 +424,111 @@ export default function Play({ anime, user, onBack, navigation }) {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent={true} />
 
-      {/* TOP NAV: Clean Gradient without padding blocking the art */}
-      <Animated.View style={styles.topNav}>
+      {/* TOP FLOATING NAV: Gradient Backdrop */}
+      <View style={styles.topNav}>
         <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
           <Defs>
-            <LinearGradient id="topNavGradient" x1="0" y1="0" x2="0" y2="1">
+            <LinearGradient id="topNavGrad" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor="#000000" stopOpacity="0.8" />
               <Stop offset="0.6" stopColor="#000000" stopOpacity="0.3" />
               <Stop offset="1" stopColor="#000000" stopOpacity="0" />
             </LinearGradient>
           </Defs>
-          <Rect width="100%" height="100%" fill="url(#topNavGradient)" />
+          <Rect width="100%" height="100%" fill="url(#topNavGrad)" />
         </Svg>
 
         <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => navigation?.goBack())}>
           <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5"><Path d="M15 18l-6-6 6-6" /></Svg>
         </TouchableOpacity>
-      </Animated.View>
+      </View>
 
-      {loading ? (
-        <View style={styles.loaderCenter}><ActivityIndicator size="large" color={BRAND_RED} /></View>
-      ) : (
-        <Animated.FlatList
-          data={activeTab === 'episodes' ? episodes : alternates}
-          keyExtractor={(item) => item.id}
-          ListHeaderComponent={renderHeader}
-          ListEmptyComponent={() => (
-            <View style={styles.emptyState}>
+      <Animated.FlatList
+        data={activeTab === 'episodes' ? episodes : alternates}
+        keyExtractor={(item, idx) => `${item.id}-${idx}`}
+        ListHeaderComponent={renderHeader}
+        ListEmptyComponent={() => (
+          <View style={styles.emptyState}>
+            {episodesLoading && activeTab === 'episodes' ? (
+              <View style={styles.loadingBox}>
+                <ActivityIndicator size="small" color={BRAND_RED} />
+                <Text style={styles.loadingText}>Fetching episodes...</Text>
+              </View>
+            ) : (
               <Text style={styles.emptyStateText}>
                 {activeTab === 'episodes' 
-                  ? (isUpcoming ? 'This series is upcoming and has not released any episodes yet.' : 'No episodes found for this series.')
-                  : 'No related media found.'}
+                  ? (isUpcoming ? 'This series is upcoming and has not broadcasted episodes yet.' : 'No episodes found for this series.')
+                  : 'No related seasons or media indexed.'}
               </Text>
-            </View>
-          )}
-          renderItem={({ item }) => {
-            if (activeTab === 'episodes') {
-              const isLoadingThis = loadingEpisode === item.epNumber;
-              return (
-                <TouchableOpacity 
-                  style={styles.epCard} 
-                  activeOpacity={0.8}
-                  onPress={() => handlePlayEpisode(item)}
-                >
-                  <View style={styles.epTopRow}>
-                    <View style={styles.epImageWrapper}>
-                      <ProxyImage source={{ uri: item.still }} style={styles.epThumbnail} resizeMode="cover" />
-                      <View style={styles.epPlayOverlay}>
-                        {isLoadingThis ? <ActivityIndicator size="small" color="#FFF" /> : <IconPlay size={16} color="#FFF" />}
-                      </View>
-                    </View>
-                    <View style={styles.epMeta}>
-                      <Text style={styles.epTitle} numberOfLines={1}>{item.epNumber}. {item.title}</Text>
-                      <Text style={styles.epDuration}>{item.duration}</Text>
+            )}
+          </View>
+        )}
+        renderItem={({ item }) => {
+          if (activeTab === 'episodes') {
+            const isLoadingThis = loadingEpisode === item.epNumber;
+            return (
+              <TouchableOpacity 
+                style={styles.epCard} 
+                activeOpacity={0.8}
+                onPress={() => handlePlayEpisode(item)}
+              >
+                <View style={styles.epTopRow}>
+                  <View style={styles.epImageWrapper}>
+                    <ProxyImage source={{ uri: item.still }} style={styles.epThumbnail} resizeMode="cover" />
+                    <View style={styles.epPlayOverlay}>
+                      {isLoadingThis ? <ActivityIndicator size="small" color="#FFF" /> : <IconPlay size={16} color="#FFF" />}
                     </View>
                   </View>
-                  <Text style={styles.epDesc} numberOfLines={2}>{item.desc}</Text>
-                </TouchableOpacity>
-              );
-            } else {
-              // Alternates List View
-              return (
-                <TouchableOpacity 
-                  style={styles.altCard} 
-                  activeOpacity={0.8}
-                  onPress={() => {
-                    navigation.push('Play', { anime: { id: item.vercelId, title: item.title, coverImage: item.coverImage, backdrop: item.coverImage } });
-                  }}
-                >
-                  <ProxyImage source={{ uri: item.coverImage }} style={styles.altThumbnail} resizeMode="cover" />
-                  <View style={styles.altMeta}>
-                    <View style={styles.altBadge}><Text style={styles.altBadgeText}>{item.relationType}</Text></View>
-                    <Text style={styles.altTitle} numberOfLines={2}>{item.title}</Text>
-                    <Text style={styles.altSub}>{item.format} • {item.year} • ★ {item.score}%</Text>
+                  <View style={styles.epMeta}>
+                    <Text style={styles.epTitle} numberOfLines={1}>{item.epNumber}. {item.title}</Text>
+                    <Text style={styles.epDuration}>{item.duration}</Text>
                   </View>
-                </TouchableOpacity>
-              );
-            }
-          }}
-          contentContainerStyle={styles.listPadding}
-          showsVerticalScrollIndicator={false}
-          onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
-          scrollEventThrottle={16}
-          overScrollMode="never"
-          bounces={false}
-        />
-      )}
+                </View>
+                <Text style={styles.epDesc} numberOfLines={2}>{item.desc}</Text>
+              </TouchableOpacity>
+            );
+          } else {
+            // Alternates
+            return (
+              <TouchableOpacity 
+                style={styles.altCard} 
+                activeOpacity={0.8}
+                onPress={() => {
+                  navigation?.push ? navigation.push('Play', { anime: item }) : (onBack && onBack());
+                }}
+              >
+                <ProxyImage source={{ uri: item.coverImage }} style={styles.altThumbnail} resizeMode="cover" />
+                <View style={styles.altMeta}>
+                  <View style={styles.altBadge}><Text style={styles.altBadgeText}>{item.relationType}</Text></View>
+                  <Text style={styles.altTitle} numberOfLines={2}>{item.title}</Text>
+                  <Text style={styles.altSub}>{item.format} • {item.year} • {item.score}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          }
+        }}
+        contentContainerStyle={styles.listPadding}
+        showsVerticalScrollIndicator={false}
+        overScrollMode="never"
+        bounces={false}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#050505' },
-  loaderCenter: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  
-  // TOP NAV WITH GRADIENT BACKGROUND
-  topNav: { position: 'absolute', top: 0, left: 0, right: 0, height: 100, zIndex: 100, paddingTop: 38, paddingHorizontal: 16 },
+  topNav: { position: 'absolute', top: 0, left: 0, right: 0, height: 95, zIndex: 100, paddingTop: 38, paddingHorizontal: 16 },
   navBackBtn: { padding: 8, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 20, alignSelf: 'flex-start' },
   
   heroContainer: { width: '100%' },
-  
-  // FULL VERTICAL POSTER STYLING
   backdropWrapper: { width: '100%', height: height * 0.65, position: 'absolute', top: 0, left: 0 },
   backdropImage: { width: '100%', height: '100%' },
   
-  heroContent: { paddingTop: height * 0.42, paddingHorizontal: 20 },
-
-  // CENTERED TITLE LOGO
+  heroContent: { paddingTop: height * 0.40, paddingHorizontal: 20 },
   logoContainer: { width: '100%', alignItems: 'center', marginBottom: 15 },
-  titleLogo: { width: width * 0.8, height: 90 },
-  titleText: { color: '#FFF', fontSize: 36, fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: {width: 0, height: 2}, textShadowRadius: 8 },
+  titleLogo: { width: width * 0.8, height: 85 },
+  titleText: { color: '#FFF', fontSize: 32, fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: {width: 0, height: 2}, textShadowRadius: 8 },
   
-  // METADATA (New Episode | 16+ | ★ 85%)
   inlineMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 20 },
   newBadge: { backgroundColor: BRAND_RED, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
   newBadgeText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
@@ -493,48 +538,45 @@ const styles = StyleSheet.create({
   ratingText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
   metaScore: { color: '#CCC', fontSize: 12, fontWeight: 'bold' },
 
-  // WATCH NOW BUTTON
   playButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: BRAND_RED, paddingVertical: 14, borderRadius: 6, marginBottom: 25 },
   playButtonText: { color: '#FFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.5 },
 
-  // ICONS ROW
-  actionsRow: { flexDirection: 'row', justifyContent: 'center', gap: 40, width: '100%', marginBottom: 30 },
-  actionBtn: { alignItems: 'center', gap: 8 },
+  actionsRow: { flexDirection: 'row', justifyContent: 'center', gap: 40, width: '100%', marginBottom: 25 },
+  actionBtn: { alignItems: 'center', gap: 6 },
   actionText: { color: '#AAA', fontSize: 10, fontWeight: '600' },
 
-  // SYNOPSIS
   synopsisContainer: { marginBottom: 20 },
   synopsisText: { color: '#E0E0E0', fontSize: 13, lineHeight: 20 },
-  seeMoreBtn: { marginTop: 8 },
+  seeMoreBtn: { marginTop: 6 },
   seeMoreText: { color: BRAND_RED, fontSize: 12, fontWeight: 'bold' },
 
-  // TABS
   tabHeader: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#222', marginBottom: 15 },
   tabBtn: { paddingVertical: 12, paddingHorizontal: 15 },
   tabBtnActive: { borderBottomWidth: 3, borderBottomColor: BRAND_RED },
   tabText: { color: '#777', fontSize: 15, fontWeight: 'bold' },
   tabTextActive: { color: '#FFF' },
 
-  listPadding: { paddingBottom: 50 },
-  epCard: { paddingHorizontal: 20, marginBottom: 20 },
-  epTopRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  listPadding: { paddingBottom: 60 },
+  epCard: { paddingHorizontal: 20, marginBottom: 18 },
+  epTopRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   epImageWrapper: { width: 130, height: 75, borderRadius: 4, overflow: 'hidden', backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
   epThumbnail: { width: '100%', height: '100%', position: 'absolute' },
   epPlayOverlay: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.6)', borderWidth: 1, borderColor: '#FFF', justifyContent: 'center', alignItems: 'center' },
   epMeta: { flex: 1, marginLeft: 15, justifyContent: 'center' },
-  epTitle: { color: '#FFF', fontSize: 14, fontWeight: 'bold', marginBottom: 4 },
+  epTitle: { color: '#FFF', fontSize: 14, fontWeight: 'bold', marginBottom: 3 },
   epDuration: { color: '#888', fontSize: 12 },
-  epDesc: { color: '#999', fontSize: 12, lineHeight: 18 },
+  epDesc: { color: '#999', fontSize: 12, lineHeight: 17 },
 
-  // ALTERNATES LIST VIEW STYLES
   altCard: { flexDirection: 'row', paddingHorizontal: 20, marginBottom: 15, alignItems: 'center' },
   altThumbnail: { width: 80, height: 110, borderRadius: 6, backgroundColor: '#1A1A1A' },
   altMeta: { flex: 1, marginLeft: 16, justifyContent: 'center' },
   altBadge: { backgroundColor: 'rgba(229,9,20,0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start', marginBottom: 6, borderWidth: 1, borderColor: 'rgba(229,9,20,0.4)' },
   altBadgeText: { color: BRAND_RED, fontSize: 9, fontWeight: '900', textTransform: 'uppercase' },
-  altTitle: { color: '#FFF', fontSize: 15, fontWeight: 'bold', marginBottom: 6 },
+  altTitle: { color: '#FFF', fontSize: 15, fontWeight: 'bold', marginBottom: 5 },
   altSub: { color: '#888', fontSize: 12, fontWeight: '600' },
   
-  emptyState: { paddingVertical: 40, alignItems: 'center' },
-  emptyStateText: { color: '#666', fontSize: 14, textAlign: 'center', paddingHorizontal: 40 }
+  emptyState: { paddingVertical: 45, alignItems: 'center' },
+  emptyStateText: { color: '#777', fontSize: 13, textAlign: 'center', paddingHorizontal: 35 },
+  loadingBox: { alignItems: 'center', gap: 10 },
+  loadingText: { color: '#888', fontSize: 12 }
 });
