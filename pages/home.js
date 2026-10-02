@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, Image, ImageBackground } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, Image } from 'react-native';
 
 import Carousel from './home/carousel';
 import RecentSlider from './home/recent_slider';
@@ -77,14 +77,13 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
   return (
     <View style={styles.container}>
       
-      {/* NEW HEADER: Loads kameko_header.png with Profile Avatar on the right */}
-      <ImageBackground 
-        source={require('../assets/kameko_header.png')} 
-        style={styles.header}
-        resizeMode="cover"
-      >
-        {/* If your image already has the text, you can remove this Text component */}
-        <View style={styles.headerLogoPlaceholder} />
+      {/* FIXED HEADER: Safely sized to prevent layout crashes */}
+      <View style={styles.header}>
+        <Image 
+          source={require('../assets/kameko_header.png')} 
+          style={styles.headerLogoImage}
+          resizeMode="contain"
+        />
         
         <TouchableOpacity onPress={onSwitchProfile} style={styles.profileSwitcher} activeOpacity={0.8}>
           <Image 
@@ -92,7 +91,7 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
             style={styles.headerAvatar} 
           />
         </TouchableOpacity>
-      </ImageBackground>
+      </View>
 
       <ScrollView 
         showsVerticalScrollIndicator={false} 
@@ -117,19 +116,29 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#050505' }, // Slightly off-black to add depth
+  container: { flex: 1, backgroundColor: '#050505' },
   header: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     alignItems: 'center', 
     paddingHorizontal: 20, 
-    paddingTop: 15, // Adjusted for status bar if needed
-    paddingBottom: 15,
+    paddingVertical: 12,
     zIndex: 100,
-    backgroundColor: 'transparent' // Removed solid black
+    backgroundColor: '#000000',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)'
   },
-  headerLogoPlaceholder: { width: 120, height: 40 }, // Spacer for layout
-  profileSwitcher: { borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.2)', borderRadius: 4, overflow: 'hidden' },
+  headerLogoImage: { 
+    width: 130, 
+    height: 35, 
+    tintColor: '#E50914' // Optional: ensures brand alignment if it's a monochrome asset, remove if full color
+  },
+  profileSwitcher: { 
+    borderWidth: 1.5, 
+    borderColor: 'rgba(255,255,255,0.2)', 
+    borderRadius: 4, 
+    overflow: 'hidden' 
+  },
   headerAvatar: { width: 34, height: 34, borderRadius: 4 },
   scroll: { flex: 1 },
   contentPadding: { paddingTop: 10 },
