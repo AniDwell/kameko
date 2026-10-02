@@ -4,17 +4,14 @@ import {
   TouchableOpacity, ActivityIndicator 
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
-import { useNavigation } from '@react-navigation/native';
 
 const BRAND_RED = '#E50914';
 
-export default function RecentSlider({ user }) {
-  const navigation = useNavigation();
+export default function RecentSlider({ user, onSelectAnime }) {
   const [animeList, setAnimeList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [librarySet, setLibrarySet] = useState(new Set());
 
-  // 1. Live Sync with Firestore Library
   useEffect(() => {
     if (!user) return;
     const unsubscribe = firestore()
@@ -29,7 +26,6 @@ export default function RecentSlider({ user }) {
     return () => unsubscribe();
   }, [user]);
 
-  // 2. Fetch Latest Episodes -> Verify with Vercel API -> Enrich with AniList
   useEffect(() => {
     const fetchRecentReleases = async () => {
       try {
@@ -38,7 +34,7 @@ export default function RecentSlider({ user }) {
         const response = await rawRes.json();
         
         const recentEpisodes = response.data || response.results || [];
-        const topRecent = recentEpisodes.slice(0, 20); // Fetch more to account for drops
+        const topRecent = recentEpisodes.slice(0, 20);
 
         const enrichedAnime = await Promise.all(topRecent.map(async (slide) => {
           const cleanTitle = (slide.title || '').replace(/\(Dub\)|\(Sub\)|Episode \d+/gi, '').trim();
@@ -47,20 +43,16 @@ export default function RecentSlider({ user }) {
           let streamId = String(slide.id);
 
           try {
-            // STRICT VERIFICATION: Must exist in Vercel API to be shown
             const vercelRes = await fetch(`${baseUrl}/api/search?keyword=${encodeURIComponent(cleanTitle)}`);
             if (!vercelRes.ok) return null;
             const vercelData = await vercelRes.json();
             const apiResults = vercelData.data || vercelData.results || vercelData || [];
             
             const exactMatch = apiResults.find(r => (r.title || '').toLowerCase() === cleanTitle.toLowerCase()) || apiResults[0];
-            
-            // IF NOT FOUND IN API, DROP IT ENTIRELY
             if (!exactMatch) return null;
             
-            streamId = exactMatch.id; // Ensure we use the exact streaming ID
+            streamId = exactMatch.id;
 
-            // If found in API, optionally fetch high-res cover from AniList
             const query = `query ($search: String) { 
               Media (search: $search, type: ANIME, sort: SEARCH_MATCH) { 
                 coverImage { extraLarge } 
@@ -80,12 +72,11 @@ export default function RecentSlider({ user }) {
             }
 
           } catch(e) {
-            console.log("Recent Slide processing error for:", cleanTitle);
-            return null; // Drop on error
+            return null;
           }
 
           return {
-            id: streamId, // Verified Vercel ID
+            id: streamId,
             title: cleanTitle,
             image: finalImage,
             episode: slide.episodeNumber || slide.episode || null,
@@ -95,7 +86,6 @@ export default function RecentSlider({ user }) {
           };
         }));
 
-        // Filter out any nulls (Anime that failed verification)
         setAnimeList(enrichedAnime.filter(item => item !== null));
       } catch (error) {
         console.error("Recent Slider fetch error:", error);
@@ -108,20 +98,19 @@ export default function RecentSlider({ user }) {
   }, []);
 
   const handleNavigateToPlay = (anime) => {
-    // Pass the required structure to Play.js
-    navigation.navigate('Play', { 
-      anime: {
+    if (onSelectAnime) {
+      onSelectAnime({ 
         id: anime.id,
         title: anime.title,
         coverImage: anime.image,
-        backdrop: anime.image, // Fallback backdrop
+        backdrop: anime.image,
         description: "Latest episode released.",
         genres: ['Anime'],
         status: anime.status,
         score: 'N/A',
         rating: 'U/A 13+'
-      } 
-    });
+      });
+    }
   };
 
   const toggleLibrary = async (anime) => {
