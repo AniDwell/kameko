@@ -1,8 +1,12 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, Image } from 'react-native';
 
-// Import the new Carousel component
+// Import our dynamic API-driven components
 import Carousel from './home/carousel';
+import RecentSlider from './home/recent_slider';
+import TrendingSlider from './home/trending_slider';
+
+// Import settings page for the bottom nav
 import ProfileSettings from './profile'; 
 
 const AVATARS = {
@@ -14,11 +18,12 @@ const AVATARS = {
   'pfp6.jpg': require('../assets/pfp6.jpg'),
 };
 
+// Mock data for the "Continue Watching" row until we build it dynamically
 const mockData = [
-  { id: '1', title: 'Movie 1' },
-  { id: '2', title: 'Movie 2' },
-  { id: '3', title: 'Movie 3' },
-  { id: '4', title: 'Movie 4' },
+  { id: '1', title: 'Continue 1' },
+  { id: '2', title: 'Continue 2' },
+  { id: '3', title: 'Continue 3' },
+  { id: '4', title: 'Continue 4' },
 ];
 
 const HorizontalRow = ({ title }) => (
@@ -29,6 +34,7 @@ const HorizontalRow = ({ title }) => (
       horizontal
       showsHorizontalScrollIndicator={false}
       keyExtractor={(item) => item.id}
+      contentContainerStyle={{ paddingHorizontal: 20 }}
       renderItem={() => (
         <View style={styles.card}>
           <Text style={styles.cardText}>Cover</Text>
@@ -51,6 +57,7 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
     </View>
   );
 
+  // Show Account Settings (Logout) if Settings tab is tapped
   if (activeTab === 'Settings') {
     return (
       <View style={styles.container}>
@@ -65,7 +72,7 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
       {/* HEADER WITH PROFILE AVATAR */}
       <View style={styles.header}>
         <Text style={styles.headerLogo}>KAMEKO</Text>
-        <TouchableOpacity onPress={onSwitchProfile} style={styles.profileSwitcher}>
+        <TouchableOpacity onPress={onSwitchProfile} style={styles.profileSwitcher} activeOpacity={0.8}>
           <Image 
             source={AVATARS[activeProfile?.avatar || 'pfp1.jpg']} 
             style={styles.headerAvatar} 
@@ -81,17 +88,21 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
         bounces={false}
       >
         
-        {/* NEW DYNAMIC CAROUSEL PLACED HERE */}
+        {/* 1. DYNAMIC HERO CAROUSEL */}
         <Carousel user={user} />
 
-        {/* SCROLLING SHELVES */}
+        {/* 2. DYNAMIC NEW RELEASES SLIDER */}
+        <RecentSlider user={user} />
+
+        {/* 3. DYNAMIC TRENDING SLIDER */}
+        <TrendingSlider user={user} />
+
+        {/* 4. STATIC CONTINUE WATCHING (Placeholder for next feature) */}
         <View style={styles.contentPadding}>
           <HorizontalRow title={`Continue Watching for ${activeProfile?.name || 'You'}`} />
-          <HorizontalRow title="Trending Now" />
-          <HorizontalRow title="Top 10 in Anime" />
         </View>
         
-        <View style={{ height: 30 }} />
+        <View style={{ height: 40 }} />
       </ScrollView>
 
       {renderBottomNav()}
@@ -111,13 +122,32 @@ const styles = StyleSheet.create({
     zIndex: 100 // Keeps header above scrolling carousel
   },
   headerLogo: { color: '#E50914', fontSize: 24, fontWeight: '900', letterSpacing: 2 },
-  profileSwitcher: { borderWidth: 1, borderColor: '#333', borderRadius: 4 },
+  profileSwitcher: { borderWidth: 1, borderColor: '#333', borderRadius: 4, overflow: 'hidden' },
   headerAvatar: { width: 32, height: 32, borderRadius: 4 },
   scroll: { flex: 1 },
-  contentPadding: { paddingTop: 20 },
+  contentPadding: { paddingTop: 10 },
   rowContainer: { marginBottom: 25 },
-  rowTitle: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginLeft: 15, marginBottom: 10 },
-  card: { width: 120, height: 170, backgroundColor: '#222222', marginLeft: 15, borderRadius: 6, justifyContent: 'center', alignItems: 'center' },
+  rowTitle: { 
+    color: '#ffffff', 
+    fontSize: 18, 
+    fontWeight: 'bold', 
+    marginLeft: 20, 
+    marginBottom: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: '#E50914',
+    paddingLeft: 8
+  },
+  card: { 
+    width: 140, 
+    height: 210, 
+    backgroundColor: '#1A1A1A', 
+    marginRight: 15, 
+    borderRadius: 8, 
+    justifyContent: 'center', 
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)'
+  },
   cardText: { color: '#555555' },
   bottomNav: { 
     flexDirection: 'row', 
@@ -130,6 +160,6 @@ const styles = StyleSheet.create({
     paddingBottom: 10 
   },
   navItem: { alignItems: 'center', padding: 10 },
-  navText: { color: '#888888', fontSize: 12, marginTop: 4 },
+  navText: { color: '#888888', fontSize: 12, marginTop: 4, fontWeight: '600' },
   navTextActive: { color: '#E50914', fontWeight: 'bold' }
 });
