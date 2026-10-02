@@ -12,32 +12,126 @@ const HEIGHT = 520;
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const BRAND_RED = '#E50914';
 
+// --- CUSTOM SKELETON COMPONENTS ---
+
+const LogoWithSkeleton = ({ uri }) => {
+  const [loaded, setLoaded] = useState(false);
+  const shimmerAnim = useRef(new Animated.Value(0.2)).current;
+
+  useEffect(() => {
+    if (!loaded) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(shimmerAnim, { toValue: 0.5, duration: 700, useNativeDriver: true }),
+          Animated.timing(shimmerAnim, { toValue: 0.2, duration: 700, useNativeDriver: true })
+        ])
+      ).start();
+    } else {
+      shimmerAnim.stopAnimation();
+    }
+  }, [loaded]);
+
+  return (
+    <View style={styles.titleLogo}>
+      {!loaded && (
+        <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#333333', borderRadius: 6, opacity: shimmerAnim }]} />
+      )}
+      <Image 
+        source={{ uri }} 
+        style={StyleSheet.absoluteFill} 
+        resizeMode="contain" 
+        fadeDuration={300}
+        onLoad={() => setLoaded(true)}
+      />
+    </View>
+  );
+};
+
+const CarouselSkeletonLayout = () => {
+  const shimmerAnim = useRef(new Animated.Value(0.2)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmerAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
+        Animated.timing(shimmerAnim, { toValue: 0.2, duration: 800, useNativeDriver: true })
+      ])
+    ).start();
+  }, []);
+
+  return (
+    <View style={styles.container}>
+      <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#1A1A1A', opacity: shimmerAnim }]} />
+      
+      {/* Permanent Gradient over the skeleton background */}
+      <Svg height="100%" width="100%" style={styles.permanentGradient}>
+        <Defs>
+          <LinearGradient id="heroGradient" x1="0" y1="1" x2="0" y2="0">
+            <Stop offset="0" stopColor="#000000" stopOpacity="1" />
+            <Stop offset="0.32" stopColor="#000000" stopOpacity="0.9" />
+            <Stop offset="0.65" stopColor="#000000" stopOpacity="0.5" />
+            <Stop offset="1" stopColor="#000000" stopOpacity="0.08" />
+          </LinearGradient>
+        </Defs>
+        <Rect width="100%" height="100%" fill="url(#heroGradient)" />
+      </Svg>
+
+      <View style={styles.uiContainer}>
+        <View style={styles.titleWrapper}>
+          <Animated.View style={{ width: 230, height: 80, backgroundColor: '#333', borderRadius: 8, marginBottom: 10, opacity: shimmerAnim }} />
+          <View style={styles.metaRow}>
+             <Animated.View style={{ width: 50, height: 18, backgroundColor: '#333', borderRadius: 4, opacity: shimmerAnim }} />
+             <Animated.View style={{ width: 40, height: 18, backgroundColor: '#333', borderRadius: 4, opacity: shimmerAnim }} />
+             <Animated.View style={{ width: 60, height: 18, backgroundColor: '#333', borderRadius: 4, opacity: shimmerAnim }} />
+          </View>
+          <View style={styles.genreRow}>
+             <Animated.View style={{ width: 60, height: 20, backgroundColor: '#333', borderRadius: 12, opacity: shimmerAnim }} />
+             <Animated.View style={{ width: 70, height: 20, backgroundColor: '#333', borderRadius: 12, opacity: shimmerAnim }} />
+          </View>
+        </View>
+
+        <Animated.View style={{ width: '90%', height: 12, backgroundColor: '#333', borderRadius: 4, marginBottom: 8, opacity: shimmerAnim }} />
+        <Animated.View style={{ width: '75%', height: 12, backgroundColor: '#333', borderRadius: 4, marginBottom: 18, opacity: shimmerAnim }} />
+
+        <View style={styles.buttonRow}>
+          <Animated.View style={{ width: 100, height: 40, backgroundColor: '#333', borderRadius: 6, opacity: shimmerAnim }} />
+          <Animated.View style={{ width: 110, height: 40, backgroundColor: '#333', borderRadius: 6, opacity: shimmerAnim }} />
+          <Animated.View style={{ width: 40, height: 40, backgroundColor: '#333', borderRadius: 6, opacity: shimmerAnim }} />
+        </View>
+      </View>
+    </View>
+  );
+};
+
+// --- MAIN CAROUSEL COMPONENT ---
+
 export default function Carousel({ user }) {
   const navigation = useNavigation();
   const [slides, setSlides] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [isNavigating, setIsNavigating] = useState(false);
   const [librarySet, setLibrarySet] = useState(new Set());
 
-  // Animations
   const fadeAnims = useRef([]).current;
   const scaleAnims = useRef([]).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
 
-  // 1. Loading Bar Animation (Login Screen Style)
+  // 1. Navigation Loading Bar Animation
   useEffect(() => {
-    if (loading) {
+    if (isNavigating) {
       progressAnim.setValue(0);
       Animated.loop(
         Animated.sequence([
-          Animated.timing(progressAnim, { toValue: 1, duration: 1200, useNativeDriver: false }),
+          Animated.timing(progressAnim, { toValue: 1, duration: 1000, useNativeDriver: false }),
           Animated.timing(progressAnim, { toValue: 0, duration: 0, useNativeDriver: false }),
         ])
       ).start();
     } else {
       progressAnim.stopAnimation();
+      progressAnim.setValue(0);
     }
-  }, [loading]);
+  }, [isNavigating]);
 
   const progressBarWidth = progressAnim.interpolate({
     inputRange: [0, 1],
@@ -59,7 +153,7 @@ export default function Carousel({ user }) {
     return () => unsubscribe();
   }, [user]);
 
-  // 3. Fetch AniList -> Verify with Vercel API -> TMDB Enrichment + Instant Cache Prefetch
+  // 3. Fetch AniList -> Verify -> TMDB Enrichment
   useEffect(() => {
     const fetchCarouselData = async () => {
       try {
@@ -67,25 +161,15 @@ export default function Carousel({ user }) {
           query { 
             Page(page: 1, perPage: 15) { 
               media(type: ANIME, sort: TRENDING_DESC, isAdult: false) { 
-                id
-                title { romaji english }
-                description
-                averageScore
-                genres
-                format
-                episodes
-                status
-                coverImage { extraLarge large }
-                bannerImage
+                id title { romaji english } description averageScore genres format episodes status
+                coverImage { extraLarge large } bannerImage
               } 
             } 
           }
         `;
 
         const aniRes = await fetch('https://graphql.anilist.co', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: aniQuery })
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: aniQuery })
         });
         const aniData = await aniRes.json();
         const aniListMedia = aniData?.data?.Page?.media || [];
@@ -100,13 +184,11 @@ export default function Carousel({ user }) {
           let finalEpisodes = anime.episodes || 0;
 
           try {
-            // STRICT VERIFICATION: Query Vercel API
             const vercelRes = await fetch(`https://anikoto-api-lyart.vercel.app/api/search?keyword=${encodeURIComponent(titleEng)}`);
             if (!vercelRes.ok) return null;
             
             const vercelData = await vercelRes.json();
             const apiResults = vercelData.data || vercelData.results || vercelData || [];
-            
             const exactMatch = apiResults.find(r => {
               const rTitle = (r.title || '').toLowerCase();
               return rTitle === titleEng.toLowerCase() || rTitle === titleRom.toLowerCase();
@@ -117,7 +199,6 @@ export default function Carousel({ user }) {
             streamId = exactMatch.id;
             finalEpisodes = exactMatch.episodes?.sub || exactMatch.episodes?.dub || exactMatch.episodeCount || exactMatch.episodes || finalEpisodes;
 
-            // Fetch TMDB Art
             const tmdbRes = await fetch(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(titleEng)}`).catch(() => null);
             if (tmdbRes && tmdbRes.ok) {
               const tmdbData = await tmdbRes.json();
@@ -149,24 +230,16 @@ export default function Carousel({ user }) {
           }
 
           return {
-            id: streamId,
-            title: titleEng,
-            description: anime.description?.replace(/<[^>]*>?/gm, '').trim() || 'No synopsis available.',
-            score: anime.averageScore,
-            genres: anime.genres?.slice(0, 3) || ['Action', 'Anime'],
-            format: anime.format || 'TV',
-            episodes: finalEpisodes,
-            status: anime.status,
-            coverImage: anime.coverImage?.extraLarge || anime.coverImage?.large,
-            backdrop,
-            logo,
-            contentRating
+            id: streamId, title: titleEng, description: anime.description?.replace(/<[^>]*>?/gm, '').trim() || 'No synopsis available.',
+            score: anime.averageScore, genres: anime.genres?.slice(0, 3) || ['Action', 'Anime'], format: anime.format || 'TV',
+            episodes: finalEpisodes, status: anime.status, coverImage: anime.coverImage?.extraLarge || anime.coverImage?.large,
+            backdrop, logo, contentRating
           };
         }));
 
         const validSlides = enrichedSlides.filter(s => s !== null).slice(0, 7);
 
-        // INSTANT CACHE WARMING: Prefetch all backdrops & logos into memory
+        // Instant Prefetch
         validSlides.forEach((s) => {
           if (s.backdrop) Image.prefetch(s.backdrop).catch(() => {});
           if (s.logo) Image.prefetch(s.logo).catch(() => {});
@@ -209,40 +282,28 @@ export default function Carousel({ user }) {
   };
 
   const handleNavigateToPlay = (animeData) => {
-    navigation.navigate('Play', { 
-      anime: {
-        id: animeData.id,
-        title: animeData.title,
-        coverImage: animeData.coverImage,
-        backdrop: animeData.backdrop,
-        description: animeData.description,
-        genres: animeData.genres,
-        status: animeData.status,
-        score: animeData.score || 'N/A',
-        rating: animeData.contentRating
-      } 
-    });
+    setIsNavigating(true); // Trigger the red loading bar
+    setTimeout(() => {
+      navigation.navigate('Play', { 
+        anime: {
+          id: animeData.id, title: animeData.title, coverImage: animeData.coverImage, backdrop: animeData.backdrop,
+          description: animeData.description, genres: animeData.genres, status: animeData.status,
+          score: animeData.score || 'N/A', rating: animeData.contentRating
+        } 
+      });
+      setIsNavigating(false); // Stop loader after navigation
+    }, 500); 
   };
 
   const toggleLibrary = async (anime) => {
     if (!user) return;
     const ref = firestore().collection('users').doc(user.uid).collection('library').doc(anime.id);
-    if (librarySet.has(anime.id)) {
-      await ref.delete();
-    } else {
-      await ref.set({ id: anime.id, title: anime.title, img: anime.coverImage || anime.backdrop, addedAt: firestore.FieldValue.serverTimestamp() });
-    }
+    if (librarySet.has(anime.id)) await ref.delete();
+    else await ref.set({ id: anime.id, title: anime.title, img: anime.coverImage || anime.backdrop, addedAt: firestore.FieldValue.serverTimestamp() });
   };
 
   if (loading) {
-    return (
-      <View style={styles.loaderContainer}>
-        <View style={styles.progressBarBg}>
-          <Animated.View style={[styles.progressBarFill, { width: progressBarWidth }]} />
-        </View>
-        <Image source={require('../../assets/Kameko_logo.png')} style={{ width: 50, height: 50, opacity: 0.3 }} />
-      </View>
-    );
+    return <CarouselSkeletonLayout />;
   }
 
   if (slides.length === 0) return null;
@@ -250,24 +311,30 @@ export default function Carousel({ user }) {
   return (
     <View style={styles.container}>
       
+      {/* Dynamic Red Loading Bar for Navigation */}
+      {isNavigating && (
+        <View style={styles.progressBarBg}>
+          <Animated.View style={[styles.progressBarFill, { width: progressBarWidth }]} />
+        </View>
+      )}
+
       {/* LAYER 1: BACKDROP IMAGES CROSS-FADING */}
       <View style={StyleSheet.absoluteFillObject}>
         {slides.map((slide, i) => (
-          <Animated.View 
-            key={slide.id} 
-            style={[styles.slideWrapper, { opacity: fadeAnims[i], zIndex: currentIndex === i ? 2 : 1 }]}
-          >
+          <Animated.View key={slide.id} style={[styles.slideWrapper, { opacity: fadeAnims[i], zIndex: currentIndex === i ? 2 : 1 }]}>
+            {/* Shimmer skeleton specifically for slow backdrop loads */}
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: '#1A1A1A' }]} />
             <Animated.Image 
               source={{ uri: slide.backdrop }} 
               style={[styles.backdrop, { transform: [{ scale: scaleAnims[i] }] }]} 
               resizeMode="cover"
-              fadeDuration={0} // Disables Android's 300ms fade delay for instant rendering
+              fadeDuration={0} // Instant snap
             />
           </Animated.View>
         ))}
       </View>
 
-      {/* LAYER 2: PERMANENT DARK GRADIENT (NEVER FADES OR BLINKS) */}
+      {/* LAYER 2: PERMANENT DARK GRADIENT (NEVER BLINKS) */}
       <Svg height="100%" width="100%" style={styles.permanentGradient} pointerEvents="none">
         <Defs>
           <LinearGradient id="heroGradient" x1="0" y1="1" x2="0" y2="0">
@@ -280,12 +347,8 @@ export default function Carousel({ user }) {
         <Rect width="100%" height="100%" fill="url(#heroGradient)" />
       </Svg>
 
-      {/* LAYER 3: CLICKABLE SURFACE FOR PLAY PAGE NAVIGATION */}
-      <TouchableOpacity 
-        style={StyleSheet.absoluteFillObject} 
-        activeOpacity={1} 
-        onPress={() => handleNavigateToPlay(slides[currentIndex])}
-      />
+      {/* LAYER 3: CLICKABLE SURFACE */}
+      <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => handleNavigateToPlay(slides[currentIndex])} />
 
       {/* LAYER 4: FOREGROUND UI CONTENT */}
       {slides.map((slide, i) => (
@@ -294,16 +357,10 @@ export default function Carousel({ user }) {
           pointerEvents={currentIndex === i ? 'box-none' : 'none'}
           style={[styles.uiContainer, { opacity: fadeAnims[i], zIndex: currentIndex === i ? 10 : 0 }]}
         >
-          {/* Title Art / Logo (Full-width prominence, no cover thumbnail) */}
           <View style={styles.titleWrapper}>
             {slide.logo ? (
               <View style={styles.logoShadowWrapper}>
-                <Image 
-                  source={{ uri: slide.logo }} 
-                  style={styles.titleLogo} 
-                  resizeMode="contain" 
-                  fadeDuration={0}
-                />
+                <LogoWithSkeleton uri={slide.logo} />
               </View>
             ) : (
               <Text style={styles.titleText}>{slide.title}</Text>
@@ -325,31 +382,18 @@ export default function Carousel({ user }) {
 
           <Text style={styles.descriptionText} numberOfLines={3}>{slide.description}</Text>
 
-          {/* Action Buttons */}
           <View style={styles.buttonRow}>
-            <TouchableOpacity 
-              style={styles.playButton} 
-              activeOpacity={0.8} 
-              onPress={() => handleNavigateToPlay(slide)}
-            >
+            <TouchableOpacity style={styles.playButton} activeOpacity={0.8} onPress={() => handleNavigateToPlay(slide)}>
               <Text style={styles.playButtonText}>▶ Play</Text>
             </TouchableOpacity>
             
-            <TouchableOpacity 
-              style={[styles.libButton, librarySet.has(slide.id) && styles.libButtonActive]}
-              onPress={() => toggleLibrary(slide)}
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={[styles.libButton, librarySet.has(slide.id) && styles.libButtonActive]} onPress={() => toggleLibrary(slide)} activeOpacity={0.8}>
               <Text style={[styles.libButtonText, librarySet.has(slide.id) && styles.libTextActive]}>
                 {librarySet.has(slide.id) ? '✓ In My List' : '+ My List'}
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={styles.iconButton} 
-              onPress={() => Share.share({ message: `Watch ${slide.title} on Kameko!` })} 
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={styles.iconButton} onPress={() => Share.share({ message: `Watch ${slide.title} on Kameko!` })} activeOpacity={0.8}>
               <Text style={styles.iconButtonText}>➦</Text>
             </TouchableOpacity>
           </View>
@@ -361,10 +405,7 @@ export default function Carousel({ user }) {
         {slides.map((_, i) => (
           <TouchableOpacity 
             key={i} 
-            onPress={() => {
-              setCurrentIndex(i);
-              transitionSlide(currentIndex, i);
-            }}
+            onPress={() => { setCurrentIndex(i); transitionSlide(currentIndex, i); }}
             style={[styles.dot, currentIndex === i && styles.dotActive]} 
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           />
@@ -376,7 +417,6 @@ export default function Carousel({ user }) {
 
 const styles = StyleSheet.create({
   container: { width, height: HEIGHT, backgroundColor: '#000000', overflow: 'hidden' },
-  loaderContainer: { width, height: HEIGHT, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000000' },
   progressBarBg: { position: 'absolute', top: 0, left: 0, right: 0, height: 3, backgroundColor: '#222222', zIndex: 9999 },
   progressBarFill: { height: '100%', backgroundColor: BRAND_RED },
   slideWrapper: { ...StyleSheet.absoluteFillObject },
