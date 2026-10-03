@@ -13,18 +13,18 @@ import firestore from '@react-native-firebase/firestore';
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
 
-// Your exact proxy configuration from the web player
+// Custom ISP Bypass Proxy for HLS Streams
 const CUSTOM_PROXY_URL = 'https://icy-wave-30d8.prashant-yash69.workers.dev/proxy?url=';
 const DEFAULT_REFERER = 'https://vidwish.live/';
 
 export default function Player({ route, navigation }) {
-  // Destructure params (make sure play.js passes animeId and userUid if you want progress tracking)
+  // Destructure parameters safely
   const { 
     streamUrl, 
     animeTitle = 'Unknown', 
     episodeNum = 1, 
     episodeTitle = '', 
-    animeId = 'unknown',
+    animeId = null,
     userUid = null
   } = route?.params || {};
 
@@ -40,12 +40,12 @@ export default function Player({ route, navigation }) {
   const hideUITimeout = useRef(null);
   const lastTapRef = useRef(0);
 
-  // 1. Construct the ISP-bypassing Proxy URL
+  // 1. Construct Proxied URL
   const proxiedUri = streamUrl 
     ? `${CUSTOM_PROXY_URL}${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(DEFAULT_REFERER)}`
     : null;
 
-  // 2. Screen Orientation & Hardware Back Handling
+  // 2. Hardware Landscape Lock
   useEffect(() => {
     async function lockScreen() {
       await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
@@ -68,13 +68,14 @@ export default function Player({ route, navigation }) {
     return true;
   };
 
-  // 3. Firebase Progress Sync (Runs every 10 seconds of playback)
+  // 3. Robust Firebase Progress Synchronization
   useEffect(() => {
     if (!userUid || !animeId || !status.isPlaying) return;
     
     const currentSecs = Math.floor((status.positionMillis || 0) / 1000);
     const durationSecs = Math.floor((status.durationMillis || 1) / 1000);
     
+    // Save progress every 10 seconds of playback
     if (currentSecs > 0 && currentSecs % 10 === 0) {
       const isCompleted = currentSecs > (durationSecs * 0.85);
       
@@ -85,11 +86,11 @@ export default function Player({ route, navigation }) {
         duration: durationSecs,
         finishedEp: isCompleted,
         timestamp: Date.now()
-      }, { merge: true }).catch(() => {});
+      }, { merge: true }).catch(err => console.log('Firebase Save Error:', err));
     }
   }, [Math.floor((status.positionMillis || 0) / 10000)]);
 
-  // 4. UI Auto-Hide Logic
+  // 4. UI Auto-Hide Engine
   const resetHideTimer = () => {
     setShowUI(true);
     Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
@@ -112,14 +113,14 @@ export default function Player({ route, navigation }) {
     }
   }, [status.isPlaying]);
 
-  // 5. Video Controls & Double Tap Gestures
+  // 5. Gesture Engine (Double Tap to Skip)
   const handleTouchOverlay = (evt) => {
     const now = Date.now();
     const tapDelay = now - lastTapRef.current;
     lastTapRef.current = now;
 
     if (tapDelay < 300) {
-      // It's a Double Tap!
+      // Double Tap logic
       const touchX = evt.nativeEvent.locationX;
       const screenHalf = Dimensions.get('window').width / 2;
       
@@ -131,7 +132,7 @@ export default function Player({ route, navigation }) {
         triggerSkipIndicator('left');
       }
     } else {
-      // Single Tap
+      // Single Tap logic
       resetHideTimer();
     }
   };
@@ -175,7 +176,8 @@ export default function Player({ route, navigation }) {
   const formatTime = (millis) => {
     if (isNaN(millis)) return "00:00";
     const totalSecs = Math.floor(millis / 1000);
-    const m = Math.floor(totalSecs / 60).toString().padStart(2, '0');
+    const h = Math.floor(totalSecs / 3600);
+    const m = Math.floor((totalSecs % 3600) / 60).toString().padStart(2, '0');
     const s = (totalSecs % 60).toString().padStart(2, '0');
     return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
   };
@@ -184,7 +186,7 @@ export default function Player({ route, navigation }) {
     return (
       <View style={styles.errorContainer}>
         <FontAwesome5 name="exclamation-triangle" size={40} color={BRAND_RED} style={{marginBottom: 15}} />
-        <Text style={styles.errorText}>Invalid Stream URL</Text>
+        <Text style={styles.errorText}>Invalid Stream Data</Text>
         <TouchableOpacity style={styles.errorBtn} onPress={handleClosePlayer}>
           <Text style={styles.errorBtnText}>Go Back</Text>
         </TouchableOpacity>
@@ -216,7 +218,7 @@ export default function Player({ route, navigation }) {
         </View>
       )}
 
-      {/* INVISIBLE GESTURE LAYER (Double Tap / Single Tap) */}
+      {/* INVISIBLE GESTURE LAYER */}
       <TouchableWithoutFeedback onPress={handleTouchOverlay}>
         <View style={StyleSheet.absoluteFillObject} />
       </TouchableWithoutFeedback>
@@ -248,7 +250,7 @@ export default function Player({ route, navigation }) {
           </TouchableOpacity>
           <View>
             <Text style={styles.animeTitle}>{animeTitle}</Text>
-            <Text style={styles.episodeTitle}>EP {episodeNum}: {episodeTitle}</Text>
+            <Text style={styles.episodeTitle}>Episode {episodeNum} {episodeTitle ? `• ${episodeTitle}` : ''}</Text>
           </View>
         </View>
 
