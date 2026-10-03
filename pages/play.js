@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, Dimensions, 
   TouchableOpacity, Animated, Share, StatusBar, 
-  ActivityIndicator, ScrollView
+  ActivityIndicator 
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
@@ -14,7 +14,7 @@ const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
 // Helper: Network fetch with timeout
-const fetchWithTimeout = async (url, options = {}, timeoutMs = 6000) => {
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 10000) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -61,6 +61,7 @@ export default function Play({ anime, user, onBack, navigation }) {
   const [episodesLoading, setEpisodesLoading] = useState(true);
   const [alternates, setAlternates] = useState([]);
   const [activeTab, setActiveTab] = useState('episodes'); 
+  const [vercelAnimeId, setVercelAnimeId] = useState(currentAnime.id);
   
   const [titleLogo, setTitleLogo] = useState(null);
   const [descExpanded, setDescExpanded] = useState(false);
@@ -127,32 +128,24 @@ export default function Play({ anime, user, onBack, navigation }) {
         let epData = [];
         let targetId = currentAnime.id;
 
-        if (targetId) {
-          try {
-            const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetId)}`, {}, 4000);
-            const json = await res.json();
-            const list = json?.data || json?.episodes || json?.results || (Array.isArray(json) ? json : []);
-            if (Array.isArray(list) && list.length > 0) epData = list;
-          } catch (_) {}
+        // Try searching for the exact Vercel ID
+        const searchRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`, {}, 4000);
+        const searchJson = await searchRes.json();
+        const matches = searchJson?.data || searchJson?.results || (Array.isArray(searchJson) ? searchJson : []);
+        
+        if (matches.length > 0) {
+          const exact = matches.find(m => (m.title || '').toLowerCase() === currentAnime.title.toLowerCase()) || matches[0];
+          targetId = exact.id;
         }
 
-        if (epData.length === 0) {
-          try {
-            const sRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`, {}, 4000);
-            const sJson = await sRes.json();
-            const matches = sJson?.data || sJson?.results || (Array.isArray(sJson) ? sJson : []);
-            
-            if (matches.length > 0) {
-              const exact = matches.find(m => (m.title || '').toLowerCase() === currentAnime.title.toLowerCase()) || matches[0];
-              targetId = exact.id;
+        if (isMounted) setVercelAnimeId(targetId);
 
-              const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetId)}`, {}, 4000);
-              const json = await res.json();
-              const list = json?.data || json?.episodes || json?.results || (Array.isArray(json) ? json : []);
-              if (Array.isArray(list)) epData = list;
-            }
-          } catch (_) {}
-        }
+        // Fetch episodes array
+        const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetId)}`, {}, 4000);
+        const json = await res.json();
+        const list = json?.data || json?.episodes || json?.results || (Array.isArray(json) ? json : []);
+        
+        if (Array.isArray(list)) epData = list;
 
         if (isMounted) {
           const formatted = epData.map((ep, idx) => {
@@ -238,36 +231,61 @@ export default function Play({ anime, user, onBack, navigation }) {
     return () => { isMounted = false; };
   }, [currentAnime.title]);
 
-  // 4. Stream Navigation
+  // 4. Guaranteed Stream Navigation Logic
   const handlePlayEpisode = async (episodeItem) => {
     try {
       setLoadingEpisode(episodeItem.epNumber);
-      const streamUrl = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(episodeItem.slug)}&server=hd-1&type=sub`;
-      const res = await fetchWithTimeout(streamUrl, {}, 5000);
+
+      // ChatGPT Fix applied: Explicitly encode ID and EP separately
+      const safeId = encodeURIComponent(vercelAnimeId || currentAnime.id);
+      const safeEp = encodeURIComponent(String(episodeItem.epNumber));
+
+      const streamUrl = `${VERCEL_API_BASE}/api/stream?id=${safeId}&ep=${safeEp}&server=hd-1&type=sub`;
+      console.log('STREAM API URL:', streamUrl);
+      
+      const res = await fetchWithTimeout(streamUrl, {}, 10000);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      
       const json = await res.json();
+      console.log('STREAM RESPONSE:', json);
 
-      let streamManifest = (json?.success && (json.data?.m3u8 || json.results?.streamingLink)) ? (json.data || json.results) : null;
+      let m3u8 = null;
+      if (json?.success && json?.data?.m3u8) {
+        m3u8 = json.data.m3u8;
+      } else if (json?.success && json?.results?.streamingLink) {
+        m3u8 = json.results.streamingLink;
+      } else if (json?.data?.streamingLink) {
+        m3u8 = json.data.streamingLink;
+      }
 
-      if (!streamManifest) {
-        const fbRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/stream/fallback?id=${encodeURIComponent(episodeItem.slug)}&server=hd-1&type=sub`, {}, 5000);
+      if (!m3u8) {
+        alert('Streaming source not found. Trying fallback...');
+        
+        // Fallback attempt
+        const fbRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/stream/fallback?id=${safeId}&ep=${safeEp}&server=hd-1&type=sub`, {}, 10000);
         const fbJson = await fbRes.json();
-        if (fbJson?.success && (fbJson.data?.m3u8 || fbJson.results?.streamingLink)) streamManifest = fbJson.data || fbJson.results;
+        
+        if (fbJson?.success && (fbJson?.data?.m3u8 || fbJson?.results?.streamingLink)) {
+           m3u8 = fbJson.data?.m3u8 || fbJson.results?.streamingLink;
+        } else {
+           alert("Stream could not be resolved from API.");
+           return;
+        }
       }
 
-      if (streamManifest?.m3u8) {
-        navigation.navigate('Player', {
-          streamUrl: streamManifest.m3u8,
-          animeTitle: currentAnime.title,
-          episodeNum: episodeItem.epNumber,
-          episodeTitle: episodeItem.title,
-          animeId: currentAnime.id,
-          userUid: user?.uid
-        });
-      } else {
-        alert("Sources are caching on host mirrors. Please try again shortly.");
-      }
+      // If valid, pass to player
+      navigation.navigate('Player', {
+        streamUrl: m3u8,
+        animeTitle: currentAnime.title,
+        episodeNum: episodeItem.epNumber,
+        episodeTitle: episodeItem.title,
+        animeId: currentAnime.id,
+        userUid: user?.uid
+      });
+
     } catch (e) {
-      alert("Failed to connect to streaming server.");
+      console.error('STREAM ERROR:', e);
+      alert(`Failed to get stream: ${e.message}`);
     } finally {
       setLoadingEpisode(null);
     }
