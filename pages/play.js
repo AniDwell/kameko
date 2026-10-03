@@ -13,7 +13,7 @@ const BRAND_RED = '#E50914';
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
-// Helper: Network fetch with timeout so slow APIs never hang the app
+// Helper: Network fetch with timeout
 const fetchWithTimeout = async (url, options = {}, timeoutMs = 6000) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -69,10 +69,11 @@ export default function Play({ anime, user, onBack, navigation }) {
   const [isUpcoming, setIsUpcoming] = useState(
     currentAnime.status?.toUpperCase() === 'UPCOMING' || currentAnime.status?.toUpperCase() === 'NOT_YET_RELEASED'
   );
+  const [inLibrary, setInLibrary] = useState(false);
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
-  // 1. Sync Library & Progress from Firestore safely
+  // 1. Sync Library & Progress from Firestore
   useEffect(() => {
     if (!user || !currentAnime?.id) return;
     const animeDocId = String(currentAnime.id);
@@ -91,8 +92,6 @@ export default function Play({ anime, user, onBack, navigation }) {
     };
   }, [user, currentAnime?.id]);
 
-  const [inLibrary, setInLibrary] = useState(false);
-
   const toggleLibrary = async () => {
     if (!user || !currentAnime?.id) return;
     const ref = firestore().collection('users').doc(user.uid).collection('library').doc(String(currentAnime.id));
@@ -108,14 +107,13 @@ export default function Play({ anime, user, onBack, navigation }) {
     }
   };
 
-  // 2. Fetch Episodes (Targeted & Fast)
+  // 2. Fetch Episodes
   useEffect(() => {
     let isMounted = true;
 
     const loadEpisodes = async () => {
       setEpisodesLoading(true);
 
-      // Check upcoming status
       if (currentAnime.status?.toUpperCase() === 'UPCOMING' || currentAnime.status?.toUpperCase() === 'NOT_YET_RELEASED') {
         if (isMounted) {
           setIsUpcoming(true);
@@ -129,7 +127,6 @@ export default function Play({ anime, user, onBack, navigation }) {
         let epData = [];
         let targetId = currentAnime.id;
 
-        // Try direct call with currentAnime.id
         if (targetId) {
           try {
             const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetId)}`, {}, 4000);
@@ -139,7 +136,6 @@ export default function Play({ anime, user, onBack, navigation }) {
           } catch (_) {}
         }
 
-        // Fallback: search title to get proper slug if direct call had 0 episodes
         if (epData.length === 0) {
           try {
             const sRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`, {}, 4000);
@@ -185,12 +181,11 @@ export default function Play({ anime, user, onBack, navigation }) {
     return () => { isMounted = false; };
   }, [currentAnime.id, currentAnime.title]);
 
-  // 3. Background Metadata (TMDB Logo & AniList Alternates)
+  // 3. Background Metadata (TMDB Logo & Alternates)
   useEffect(() => {
     let isMounted = true;
 
     const loadMeta = async () => {
-      // Fetch TMDB Logo
       try {
         const cleanTitle = currentAnime.title.replace(/\(Dub\)|\(Sub\)/gi, '').trim();
         const tmdbRes = await fetchWithTimeout(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(cleanTitle)}`, {}, 4000);
@@ -201,45 +196,27 @@ export default function Play({ anime, user, onBack, navigation }) {
           const imgRes = await fetchWithTimeout(`https://api.themoviedb.org/3/tv/${show.id}/images?api_key=${TMDB_API_KEY}`, {}, 4000);
           const imgJson = await imgRes.json();
           const logo = imgJson?.logos?.find(l => l.iso_639_1 === 'en' || l.iso_639_1 === 'ja');
-          if (logo && isMounted) {
-            setTitleLogo(`https://image.tmdb.org/t/p/w500${logo.file_path}`);
-          }
+          if (logo && isMounted) setTitleLogo(`https://image.tmdb.org/t/p/w500${logo.file_path}`);
         }
       } catch (_) {}
 
-      // Fetch AniList Alternates without blocking
       try {
         const aniQuery = `
           query ($search: String) {
             Media (search: $search, type: ANIME) {
               status
-              relations {
-                edges {
-                  relationType
-                  node {
-                    id
-                    title { romaji english }
-                    coverImage { extraLarge large }
-                    format
-                    seasonYear
-                    averageScore
-                  }
-                }
-              }
+              relations { edges { relationType node { id title { romaji english } coverImage { extraLarge large } format seasonYear averageScore } } }
             }
           }
         `;
         const aRes = await fetchWithTimeout('https://graphql.anilist.co', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: aniQuery, variables: { search: currentAnime.title } })
         }, 4000);
         const aJson = await aRes.json();
         const media = aJson?.data?.Media;
 
-        if (media?.status && isMounted) {
-          if (media.status === 'NOT_YET_RELEASED') setIsUpcoming(true);
-        }
+        if (media?.status && isMounted && media.status === 'NOT_YET_RELEASED') setIsUpcoming(true);
 
         const edges = media?.relations?.edges || [];
         if (isMounted) {
@@ -261,29 +238,20 @@ export default function Play({ anime, user, onBack, navigation }) {
     return () => { isMounted = false; };
   }, [currentAnime.title]);
 
-  // 4. Handle Episode Stream Navigation
+  // 4. Stream Navigation
   const handlePlayEpisode = async (episodeItem) => {
     try {
       setLoadingEpisode(episodeItem.epNumber);
-
-      const targetServer = 'hd-1';
-      const targetType = 'sub';
-      const streamUrl = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(episodeItem.slug)}&server=${targetServer}&type=${targetType}`;
-      
+      const streamUrl = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(episodeItem.slug)}&server=hd-1&type=sub`;
       const res = await fetchWithTimeout(streamUrl, {}, 5000);
       const json = await res.json();
 
-      let streamManifest = (json?.success && (json.data?.m3u8 || json.results?.streamingLink)) 
-        ? (json.data || json.results) 
-        : null;
+      let streamManifest = (json?.success && (json.data?.m3u8 || json.results?.streamingLink)) ? (json.data || json.results) : null;
 
       if (!streamManifest) {
-        // Fallback server
-        const fbRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/stream/fallback?id=${encodeURIComponent(episodeItem.slug)}&server=${targetServer}&type=${targetType}`, {}, 5000);
+        const fbRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/stream/fallback?id=${encodeURIComponent(episodeItem.slug)}&server=hd-1&type=sub`, {}, 5000);
         const fbJson = await fbRes.json();
-        if (fbJson?.success && (fbJson.data?.m3u8 || fbJson.results?.streamingLink)) {
-          streamManifest = fbJson.data || fbJson.results;
-        }
+        if (fbJson?.success && (fbJson.data?.m3u8 || fbJson.results?.streamingLink)) streamManifest = fbJson.data || fbJson.results;
       }
 
       if (streamManifest?.m3u8) {
@@ -307,7 +275,7 @@ export default function Play({ anime, user, onBack, navigation }) {
 
   const renderHeader = () => (
     <View style={styles.heroContainer}>
-      {/* FULL POSTER BACKGROUND */}
+      {/* VERTICAL POSTER BACKGROUND */}
       <View style={styles.backdropWrapper}>
         <ProxyImage source={{ uri: currentAnime.coverImage || currentAnime.backdrop }} style={styles.backdropImage} resizeMode="cover" />
         
@@ -316,8 +284,8 @@ export default function Play({ anime, user, onBack, navigation }) {
           <Defs>
             <LinearGradient id="heroGradient" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor="#050505" stopOpacity="0.05" />
-              <Stop offset="0.45" stopColor="#050505" stopOpacity="0.4" />
-              <Stop offset="0.75" stopColor="#050505" stopOpacity="0.9" />
+              <Stop offset="0.45" stopColor="#050505" stopOpacity="0.5" />
+              <Stop offset="0.75" stopColor="#050505" stopOpacity="0.95" />
               <Stop offset="1" stopColor="#050505" stopOpacity="1" />
             </LinearGradient>
           </Defs>
@@ -326,7 +294,7 @@ export default function Play({ anime, user, onBack, navigation }) {
       </View>
 
       <View style={styles.heroContent}>
-        {/* TITLE LOGO OR TYPOGRAPHY */}
+        {/* TMDB TITLE LOGO */}
         <View style={styles.logoContainer}>
           {titleLogo ? (
             <ProxyImage source={{ uri: titleLogo }} style={styles.titleLogo} resizeMode="contain" />
@@ -382,7 +350,7 @@ export default function Play({ anime, user, onBack, navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* SYNOPSIS WITH TOGGLE */}
+        {/* SYNOPSIS */}
         <View style={styles.synopsisContainer}>
           <Text style={styles.synopsisText} numberOfLines={descExpanded ? undefined : 3}>
             {currentAnime.description}
@@ -424,13 +392,13 @@ export default function Play({ anime, user, onBack, navigation }) {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent={true} />
 
-      {/* TOP FLOATING NAV: Gradient Backdrop */}
+      {/* TOP FLOATING NAV */}
       <View style={styles.topNav}>
         <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
           <Defs>
             <LinearGradient id="topNavGrad" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0" stopColor="#000000" stopOpacity="0.8" />
-              <Stop offset="0.6" stopColor="#000000" stopOpacity="0.3" />
+              <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
+              <Stop offset="0.6" stopColor="#000000" stopOpacity="0.4" />
               <Stop offset="1" stopColor="#000000" stopOpacity="0" />
             </LinearGradient>
           </Defs>
@@ -466,11 +434,7 @@ export default function Play({ anime, user, onBack, navigation }) {
           if (activeTab === 'episodes') {
             const isLoadingThis = loadingEpisode === item.epNumber;
             return (
-              <TouchableOpacity 
-                style={styles.epCard} 
-                activeOpacity={0.8}
-                onPress={() => handlePlayEpisode(item)}
-              >
+              <TouchableOpacity style={styles.epCard} activeOpacity={0.8} onPress={() => handlePlayEpisode(item)}>
                 <View style={styles.epTopRow}>
                   <View style={styles.epImageWrapper}>
                     <ProxyImage source={{ uri: item.still }} style={styles.epThumbnail} resizeMode="cover" />
@@ -487,15 +451,8 @@ export default function Play({ anime, user, onBack, navigation }) {
               </TouchableOpacity>
             );
           } else {
-            // Alternates
             return (
-              <TouchableOpacity 
-                style={styles.altCard} 
-                activeOpacity={0.8}
-                onPress={() => {
-                  navigation?.push ? navigation.push('Play', { anime: item }) : (onBack && onBack());
-                }}
-              >
+              <TouchableOpacity style={styles.altCard} activeOpacity={0.8} onPress={() => { navigation?.push ? navigation.push('Play', { anime: item }) : (onBack && onBack()); }}>
                 <ProxyImage source={{ uri: item.coverImage }} style={styles.altThumbnail} resizeMode="cover" />
                 <View style={styles.altMeta}>
                   <View style={styles.altBadge}><Text style={styles.altBadgeText}>{item.relationType}</Text></View>
@@ -517,8 +474,8 @@ export default function Play({ anime, user, onBack, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#050505' },
-  topNav: { position: 'absolute', top: 0, left: 0, right: 0, height: 95, zIndex: 100, paddingTop: 38, paddingHorizontal: 16 },
-  navBackBtn: { padding: 8, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 20, alignSelf: 'flex-start' },
+  topNav: { position: 'absolute', top: 0, left: 0, right: 0, height: 110, zIndex: 100, paddingTop: 45, paddingHorizontal: 16 },
+  navBackBtn: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20, alignSelf: 'flex-start' },
   
   heroContainer: { width: '100%' },
   backdropWrapper: { width: '100%', height: height * 0.65, position: 'absolute', top: 0, left: 0 },
@@ -526,7 +483,7 @@ const styles = StyleSheet.create({
   
   heroContent: { paddingTop: height * 0.40, paddingHorizontal: 20 },
   logoContainer: { width: '100%', alignItems: 'center', marginBottom: 15 },
-  titleLogo: { width: width * 0.8, height: 85 },
+  titleLogo: { width: width * 0.8, height: 110 },
   titleText: { color: '#FFF', fontSize: 32, fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: {width: 0, height: 2}, textShadowRadius: 8 },
   
   inlineMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 20 },
