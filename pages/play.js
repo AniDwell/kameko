@@ -13,12 +13,20 @@ const BRAND_RED = '#E50914';
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
-// Helper: Network fetch with timeout
+// Helper: Network fetch with timeout and Spoofed Browser Headers (Critical for Vercel/Cloudflare APIs)
 const fetchWithTimeout = async (url, options = {}, timeoutMs = 10000) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
+    const res = await fetch(url, { 
+      ...options, 
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        ...(options.headers || {})
+      },
+      signal: controller.signal 
+    });
     clearTimeout(id);
     return res;
   } catch (err) {
@@ -93,22 +101,7 @@ export default function Play({ anime, user, onBack, navigation }) {
     };
   }, [user, currentAnime?.id]);
 
-  const toggleLibrary = async () => {
-    if (!user || !currentAnime?.id) return;
-    const ref = firestore().collection('users').doc(user.uid).collection('library').doc(String(currentAnime.id));
-    if (inLibrary) {
-      await ref.delete().catch(() => {});
-    } else {
-      await ref.set({ 
-        id: String(currentAnime.id), 
-        title: currentAnime.title, 
-        img: currentAnime.coverImage || currentAnime.backdrop, 
-        addedAt: firestore.FieldValue.serverTimestamp() 
-      }).catch(() => {});
-    }
-  };
-
-  // 2. Fetch Episodes
+  // 2. Fetch Episodes & Auto-Resolve Database Slug
   useEffect(() => {
     let isMounted = true;
 
@@ -125,36 +118,44 @@ export default function Play({ anime, user, onBack, navigation }) {
       }
 
       try {
-        let epData = [];
-        let targetId = currentAnime.id;
+        let targetSlug = currentAnime.id; 
 
-        // Try searching for the exact Vercel ID
-        const searchRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`, {}, 4000);
+        // STEP A: Search the API to find the exact database slug (e.g. solo-leveling-xyz)
+        const searchRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`, {}, 6000);
         const searchJson = await searchRes.json();
         const matches = searchJson?.data || searchJson?.results || (Array.isArray(searchJson) ? searchJson : []);
         
         if (matches.length > 0) {
-          const exact = matches.find(m => (m.title || '').toLowerCase() === currentAnime.title.toLowerCase()) || matches[0];
-          targetId = exact.id;
+          // Verify exact match to avoid loading spin-offs or movies by mistake
+          const exactMatch = matches.find(m => 
+            (m.title || '').toLowerCase() === currentAnime.title.toLowerCase() ||
+            (m.japanese_title || '').toLowerCase() === currentAnime.title.toLowerCase()
+          ) || matches[0];
+          
+          targetSlug = exactMatch.id;
         }
 
-        if (isMounted) setVercelAnimeId(targetId);
+        if (isMounted) setVercelAnimeId(targetSlug);
 
-        // Fetch episodes array
-        const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetId)}`, {}, 4000);
+        // STEP B: Fetch episode list using the verified slug
+        const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetSlug)}`, {}, 6000);
         const json = await res.json();
-        const list = json?.data || json?.episodes || json?.results || (Array.isArray(json) ? json : []);
         
-        if (Array.isArray(list)) epData = list;
+        let epList = [];
+        if (json?.results?.episodes) epList = json.results.episodes;
+        else if (Array.isArray(json?.results)) epList = json.results;
+        else if (Array.isArray(json?.data)) epList = json.data;
+        else if (Array.isArray(json)) epList = json;
 
         if (isMounted) {
-          const formatted = epData.map((ep, idx) => {
-            const epNum = ep.num ?? ep.episode_no ?? ep.number ?? ep.episode ?? (idx + 1);
+          const formatted = epList.map((ep, idx) => {
+            const epNum = ep.episode_no ?? ep.number ?? ep.num ?? ep.episode ?? (idx + 1);
             return {
+              // Store the exact episode ID (which contains the required ?ep= format for streaming)
               id: String(ep.id || idx + 1),
               slug: String(ep.slug || ep.id || epNum),
               epNumber: epNum,
-              title: ep.title || `Episode ${epNum}`,
+              title: ep.title || ep.jname || `Episode ${epNum}`,
               desc: ep.description || ep.desc || 'No summary available for this episode.',
               still: ep.image || ep.still || ep.thumbnail || currentAnime.backdrop || currentAnime.coverImage,
               duration: ep.duration ? `${ep.duration}m` : '24m'
@@ -164,6 +165,7 @@ export default function Play({ anime, user, onBack, navigation }) {
           setIsUpcoming(formatted.length === 0 && currentAnime.status?.toUpperCase().includes('UPCOMING'));
         }
       } catch (err) {
+        console.error("Episode Resolve Error:", err);
         if (isMounted) setEpisodes([]);
       } finally {
         if (isMounted) setEpisodesLoading(false);
@@ -231,16 +233,31 @@ export default function Play({ anime, user, onBack, navigation }) {
     return () => { isMounted = false; };
   }, [currentAnime.title]);
 
+  const toggleLibrary = async () => {
+    if (!user || !currentAnime?.id) return;
+    const ref = firestore().collection('users').doc(user.uid).collection('library').doc(String(currentAnime.id));
+    if (inLibrary) {
+      await ref.delete().catch(() => {});
+    } else {
+      await ref.set({ 
+        id: String(currentAnime.id), 
+        title: currentAnime.title, 
+        img: currentAnime.coverImage || currentAnime.backdrop, 
+        addedAt: firestore.FieldValue.serverTimestamp() 
+      }).catch(() => {});
+    }
+  };
+
   // 4. Guaranteed Stream Navigation Logic
   const handlePlayEpisode = async (episodeItem) => {
     try {
       setLoadingEpisode(episodeItem.epNumber);
 
-      // ChatGPT Fix applied: Explicitly encode ID and EP separately
-      const safeId = encodeURIComponent(vercelAnimeId || currentAnime.id);
-      const safeEp = encodeURIComponent(String(episodeItem.epNumber));
+      // STEP C: Use the episode's exact ID, which already contains the required target structure
+      const targetStreamId = episodeItem.slug || episodeItem.id;
 
-      const streamUrl = `${VERCEL_API_BASE}/api/stream?id=${safeId}&ep=${safeEp}&server=hd-1&type=sub`;
+      // Note: We format the URL exactly as the documentation expects (id={episodeString})
+      const streamUrl = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(targetStreamId)}&server=hd-1&type=sub`;
       console.log('STREAM API URL:', streamUrl);
       
       const res = await fetchWithTimeout(streamUrl, {}, 10000);
@@ -250,25 +267,34 @@ export default function Play({ anime, user, onBack, navigation }) {
       console.log('STREAM RESPONSE:', json);
 
       let m3u8 = null;
-      if (json?.success && json?.data?.m3u8) {
-        m3u8 = json.data.m3u8;
-      } else if (json?.success && json?.results?.streamingLink) {
-        m3u8 = json.results.streamingLink;
-      } else if (json?.data?.streamingLink) {
-        m3u8 = json.data.streamingLink;
+      if (json?.success) {
+        const dataNode = json.data || json.results;
+        if (dataNode?.m3u8) {
+            m3u8 = dataNode.m3u8;
+        } else if (dataNode?.streamingLink) {
+            const links = dataNode.streamingLink;
+            m3u8 = Array.isArray(links) ? (links[0]?.link?.file || links[0]?.file) : links;
+        }
       }
 
       if (!m3u8) {
-        alert('Streaming source not found. Trying fallback...');
-        
-        // Fallback attempt
-        const fbRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/stream/fallback?id=${safeId}&ep=${safeEp}&server=hd-1&type=sub`, {}, 10000);
+        console.log('Main stream failed. Trying fallback API...');
+        const fbUrl = `${VERCEL_API_BASE}/api/stream/fallback?id=${encodeURIComponent(targetStreamId)}&server=hd-1&type=sub`;
+        const fbRes = await fetchWithTimeout(fbUrl, {}, 10000);
         const fbJson = await fbRes.json();
         
-        if (fbJson?.success && (fbJson?.data?.m3u8 || fbJson?.results?.streamingLink)) {
-           m3u8 = fbJson.data?.m3u8 || fbJson.results?.streamingLink;
-        } else {
-           alert("Stream could not be resolved from API.");
+        if (fbJson?.success) {
+           const fbDataNode = fbJson.data || fbJson.results;
+           if (fbDataNode?.m3u8) {
+               m3u8 = fbDataNode.m3u8;
+           } else if (fbDataNode?.streamingLink) {
+               const fbLinks = fbDataNode.streamingLink;
+               m3u8 = Array.isArray(fbLinks) ? (fbLinks[0]?.link?.file || fbLinks[0]?.file) : fbLinks;
+           }
+        }
+
+        if (!m3u8) {
+           alert("Stream could not be resolved from API. The source may be offline.");
            return;
         }
       }
@@ -279,7 +305,7 @@ export default function Play({ anime, user, onBack, navigation }) {
         animeTitle: currentAnime.title,
         episodeNum: episodeItem.epNumber,
         episodeTitle: episodeItem.title,
-        animeId: currentAnime.id,
+        animeId: vercelAnimeId || currentAnime.id,
         userUid: user?.uid
       });
 
@@ -293,11 +319,9 @@ export default function Play({ anime, user, onBack, navigation }) {
 
   const renderHeader = () => (
     <View style={styles.heroContainer}>
-      {/* VERTICAL POSTER BACKGROUND */}
       <View style={styles.backdropWrapper}>
         <ProxyImage source={{ uri: currentAnime.coverImage || currentAnime.backdrop }} style={styles.backdropImage} resizeMode="cover" />
         
-        {/* Soft bottom dark gradient */}
         <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
           <Defs>
             <LinearGradient id="heroGradient" x1="0" y1="0" x2="0" y2="1">
@@ -312,7 +336,6 @@ export default function Play({ anime, user, onBack, navigation }) {
       </View>
 
       <View style={styles.heroContent}>
-        {/* TMDB TITLE LOGO */}
         <View style={styles.logoContainer}>
           {titleLogo ? (
             <ProxyImage source={{ uri: titleLogo }} style={styles.titleLogo} resizeMode="contain" />
@@ -321,7 +344,6 @@ export default function Play({ anime, user, onBack, navigation }) {
           )}
         </View>
 
-        {/* METADATA ROW */}
         <View style={styles.inlineMetaRow}>
           {isUpcoming ? (
             <View style={styles.upcomingBadge}><Text style={styles.upcomingBadgeText}>UPCOMING</Text></View>
@@ -332,7 +354,6 @@ export default function Play({ anime, user, onBack, navigation }) {
           <Text style={styles.metaScore}>★ {currentAnime.score || 85}%</Text>
         </View>
 
-        {/* PRIMARY PLAY BUTTON */}
         <TouchableOpacity 
           style={[styles.playButton, (episodes.length === 0 || isUpcoming) && { opacity: 0.5 }]} 
           activeOpacity={0.85}
@@ -350,7 +371,6 @@ export default function Play({ anime, user, onBack, navigation }) {
           {!isUpcoming && episodes.length > 0 && <IconPlay size={18} color="#000" />}
         </TouchableOpacity>
 
-        {/* ACTION ROW */}
         <View style={styles.actionsRow}>
           <TouchableOpacity style={styles.actionBtn} onPress={toggleLibrary} activeOpacity={0.7}>
             {inLibrary ? <IconCheck /> : <IconPlus />}
@@ -368,7 +388,6 @@ export default function Play({ anime, user, onBack, navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* SYNOPSIS */}
         <View style={styles.synopsisContainer}>
           <Text style={styles.synopsisText} numberOfLines={descExpanded ? undefined : 3}>
             {currentAnime.description}
@@ -380,7 +399,6 @@ export default function Play({ anime, user, onBack, navigation }) {
           )}
         </View>
 
-        {/* TABS */}
         <View style={styles.tabHeader}>
           <TouchableOpacity 
             style={[styles.tabBtn, activeTab === 'episodes' && styles.tabBtnActive]} 
@@ -410,7 +428,6 @@ export default function Play({ anime, user, onBack, navigation }) {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent={true} />
 
-      {/* TOP FLOATING NAV */}
       <View style={styles.topNav}>
         <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
           <Defs>
