@@ -1,537 +1,335 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
-  View, Text, StyleSheet, Dimensions, 
-  TouchableOpacity, Animated, Share, StatusBar, 
-  ActivityIndicator 
+  View, Text, StyleSheet, TouchableOpacity, Animated, 
+  Dimensions, ActivityIndicator, StatusBar, BackHandler,
+  TouchableWithoutFeedback
 } from 'react-native';
+import { Video, ResizeMode } from 'expo-av';
+import * as ScreenOrientation from 'expo-screen-orientation';
+import { FontAwesome5 } from '@expo/vector-icons';
+import Slider from '@react-native-community/slider';
 import firestore from '@react-native-firebase/firestore';
-import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
-import ProxyImage from '../components/ProxyImage';
 
-const { width, height } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
-const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
-const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
-// Helper: Network fetch with timeout
-const fetchWithTimeout = async (url, options = {}, timeoutMs = 6000) => {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
-    clearTimeout(id);
-    return res;
-  } catch (err) {
-    clearTimeout(id);
-    throw err;
-  }
-};
+// Worker Proxy to bypass ISP and Inject Referer Headers safely
+const CUSTOM_PROXY_URL = 'https://icy-wave-30d8.prashant-yash69.workers.dev/proxy?url=';
 
-// --- SVG ICONS ---
-const IconPlay = ({ size = 18, color = "#000" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>
-);
-const IconPlus = ({ size = 24, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M12 5v14M5 12h14" /></Svg>
-);
-const IconCheck = ({ size = 24, color = BRAND_RED }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="3"><Path d="M20 6L9 17l-5-5" /></Svg>
-);
-const IconShare = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" /></Svg>
-);
-const IconDownload = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></Svg>
-);
+export default function Player({ route, navigation }) {
+  // Receives all precise data from play.js
+  const { 
+    streamUrl, 
+    referer = 'https://vidwish.live/', 
+    subtitles = [],
+    animeTitle = 'Unknown', 
+    episodeNum = 1, 
+    episodeTitle = '', 
+    animeId = null,
+    userUid = null
+  } = route?.params || {};
 
-export default function Play({ anime, user, onBack, navigation }) {
-  const currentAnime = anime || {
-    id: 'solo-leveling',
-    title: 'Solo Leveling',
-    coverImage: 'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx151807-m1gX3iqITmI6.png',
-    backdrop: 'https://image.tmdb.org/t/p/original/vIgyYkXkg6NC2whRbYjBD7eb3Er.jpg',
-    description: "In a world of gifted hunters, Sung Jinwoo struggles as the weakest. After surviving a deadly dungeon, he receives an exclusive quest system.",
-    genres: ['Action', 'Fantasy', 'Adventure'],
-    score: 85,
-    rating: 'U/A 16+',
-    status: 'RELEASING'
-  };
-
-  const [episodes, setEpisodes] = useState([]);
-  const [episodesLoading, setEpisodesLoading] = useState(true);
-  const [alternates, setAlternates] = useState([]);
-  const [activeTab, setActiveTab] = useState('episodes'); 
+  const videoRef = useRef(null);
+  const uiOpacity = useRef(new Animated.Value(1)).current;
   
-  const [titleLogo, setTitleLogo] = useState(null);
-  const [descExpanded, setDescExpanded] = useState(false);
-  const [userProgress, setUserProgress] = useState({ episodeNum: 1 });
-  const [loadingEpisode, setLoadingEpisode] = useState(null);
-  const [isUpcoming, setIsUpcoming] = useState(
-    currentAnime.status?.toUpperCase() === 'UPCOMING' || currentAnime.status?.toUpperCase() === 'NOT_YET_RELEASED'
-  );
-  const [inLibrary, setInLibrary] = useState(false);
+  const [status, setStatus] = useState({});
+  const [isReady, setIsReady] = useState(false);
+  const [showUI, setShowUI] = useState(true);
+  const [resizeMode, setResizeMode] = useState(ResizeMode.CONTAIN);
+  const [showSkipIndicator, setShowSkipIndicator] = useState(null); 
+  
+  const hideUITimeout = useRef(null);
+  const lastTapRef = useRef(0);
 
-  const scrollY = useRef(new Animated.Value(0)).current;
+  // 1. Construct Safe Proxied URI
+  const proxiedUri = streamUrl 
+    ? `${CUSTOM_PROXY_URL}${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(referer)}`
+    : null;
 
-  // 1. Sync Library & Progress from Firestore
+  // 2. Hardware Landscape Lock
   useEffect(() => {
-    if (!user || !currentAnime?.id) return;
-    const animeDocId = String(currentAnime.id);
+    async function lockScreen() {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+      StatusBar.setHidden(true);
+    }
+    lockScreen();
 
-    const libRef = firestore().collection('users').doc(user.uid).collection('library').doc(animeDocId);
-    const libUnsub = libRef.onSnapshot(doc => setInLibrary(doc?.exists || false), () => {});
-
-    const progRef = firestore().collection('users').doc(user.uid).collection('progress').doc(animeDocId);
-    const progUnsub = progRef.onSnapshot(doc => {
-      if (doc?.exists) setUserProgress(doc.data());
-    }, () => {});
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleClosePlayer);
 
     return () => {
-      libUnsub();
-      progUnsub();
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
+      StatusBar.setHidden(false);
+      backHandler.remove();
     };
-  }, [user, currentAnime?.id]);
+  }, []);
 
-  const toggleLibrary = async () => {
-    if (!user || !currentAnime?.id) return;
-    const ref = firestore().collection('users').doc(user.uid).collection('library').doc(String(currentAnime.id));
-    if (inLibrary) {
-      await ref.delete().catch(() => {});
-    } else {
-      await ref.set({ 
-        id: String(currentAnime.id), 
-        title: currentAnime.title, 
-        img: currentAnime.coverImage || currentAnime.backdrop, 
-        addedAt: firestore.FieldValue.serverTimestamp() 
-      }).catch(() => {});
-    }
+  const handleClosePlayer = async () => {
+    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
+    navigation.goBack();
+    return true;
   };
 
-  // 2. Fetch Episodes
+  // 3. Firebase Progress Synchronization
   useEffect(() => {
-    let isMounted = true;
+    if (!userUid || !animeId || !status.isPlaying) return;
+    
+    const currentSecs = Math.floor((status.positionMillis || 0) / 1000);
+    const durationSecs = Math.floor((status.durationMillis || 1) / 1000);
+    
+    if (currentSecs > 0 && currentSecs % 10 === 0) {
+      const isCompleted = currentSecs > (durationSecs * 0.85);
+      
+      firestore().collection('users').doc(userUid).collection('progress').doc(String(animeId)).set({
+        animeId: String(animeId),
+        lastWatchedEp: episodeNum,
+        progress: currentSecs,
+        duration: durationSecs,
+        finishedEp: isCompleted,
+        timestamp: Date.now()
+      }, { merge: true }).catch(err => console.log('Firebase Save Error:', err));
+    }
+  }, [Math.floor((status.positionMillis || 0) / 10000)]);
 
-    const loadEpisodes = async () => {
-      setEpisodesLoading(true);
-
-      if (currentAnime.status?.toUpperCase() === 'UPCOMING' || currentAnime.status?.toUpperCase() === 'NOT_YET_RELEASED') {
-        if (isMounted) {
-          setIsUpcoming(true);
-          setEpisodes([]);
-          setEpisodesLoading(false);
-        }
-        return;
+  // 4. Auto-Hide Engine
+  const resetHideTimer = () => {
+    setShowUI(true);
+    Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+    
+    if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
+    
+    hideUITimeout.current = setTimeout(() => {
+      if (status.isPlaying) {
+        Animated.timing(uiOpacity, { toValue: 0, duration: 400, useNativeDriver: true }).start(() => setShowUI(false));
       }
+    }, 4000);
+  };
 
-      try {
-        let epData = [];
-        let targetId = currentAnime.id;
-
-        // Try searching for the exact Vercel ID if needed
-        const searchRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`, {}, 4000);
-        const searchJson = await searchRes.json();
-        const matches = searchJson?.data || searchJson?.results || (Array.isArray(searchJson) ? searchJson : []);
-        
-        if (matches.length > 0) {
-          const exact = matches.find(m => (m.title || '').toLowerCase() === currentAnime.title.toLowerCase()) || matches[0];
-          targetId = exact.id;
-        }
-
-        // Fetch episodes array
-        const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetId)}`, {}, 4000);
-        const json = await res.json();
-        const list = json?.data || json?.episodes || json?.results || (Array.isArray(json) ? json : []);
-        
-        if (Array.isArray(list)) epData = list;
-
-        if (isMounted) {
-          const formatted = epData.map((ep, idx) => {
-            const epNum = ep.num ?? ep.episode_no ?? ep.number ?? ep.episode ?? (idx + 1);
-            return {
-              id: String(ep.id || idx + 1),
-              slug: String(ep.slug || ep.id || epNum), // <--- Critical for playing
-              epNumber: epNum,
-              title: ep.title || `Episode ${epNum}`,
-              desc: ep.description || ep.desc || 'No summary available for this episode.',
-              still: ep.image || ep.still || ep.thumbnail || currentAnime.backdrop || currentAnime.coverImage,
-              duration: ep.duration ? `${ep.duration}m` : '24m'
-            };
-          });
-          setEpisodes(formatted);
-          setIsUpcoming(formatted.length === 0 && currentAnime.status?.toUpperCase().includes('UPCOMING'));
-        }
-      } catch (err) {
-        if (isMounted) setEpisodes([]);
-      } finally {
-        if (isMounted) setEpisodesLoading(false);
-      }
-    };
-
-    loadEpisodes();
-    return () => { isMounted = false; };
-  }, [currentAnime.id, currentAnime.title]);
-
-  // 3. Background Metadata (TMDB Logo & Alternates)
   useEffect(() => {
-    let isMounted = true;
+    if (status.isPlaying) resetHideTimer();
+    else {
+      if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
+      setShowUI(true);
+      Animated.timing(uiOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    }
+  }, [status.isPlaying]);
 
-    const loadMeta = async () => {
-      try {
-        const cleanTitle = currentAnime.title.replace(/\(Dub\)|\(Sub\)/gi, '').trim();
-        const tmdbRes = await fetchWithTimeout(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(cleanTitle)}`, {}, 4000);
-        const tmdbJson = await tmdbRes.json();
-        const show = tmdbJson?.results?.[0];
+  // 5. Gesture Engine (Double Tap to Skip)
+  const handleTouchOverlay = (evt) => {
+    const now = Date.now();
+    const tapDelay = now - lastTapRef.current;
+    lastTapRef.current = now;
 
-        if (show && isMounted) {
-          const imgRes = await fetchWithTimeout(`https://api.themoviedb.org/3/tv/${show.id}/images?api_key=${TMDB_API_KEY}`, {}, 4000);
-          const imgJson = await imgRes.json();
-          const logo = imgJson?.logos?.find(l => l.iso_639_1 === 'en' || l.iso_639_1 === 'ja');
-          if (logo && isMounted) setTitleLogo(`https://image.tmdb.org/t/p/w500${logo.file_path}`);
-        }
-      } catch (_) {}
-
-      try {
-        const aniQuery = `
-          query ($search: String) {
-            Media (search: $search, type: ANIME) {
-              status
-              relations { edges { relationType node { id title { romaji english } coverImage { extraLarge large } format seasonYear averageScore } } }
-            }
-          }
-        `;
-        const aRes = await fetchWithTimeout('https://graphql.anilist.co', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: aniQuery, variables: { search: currentAnime.title } })
-        }, 4000);
-        const aJson = await aRes.json();
-        const media = aJson?.data?.Media;
-
-        if (media?.status && isMounted && media.status === 'NOT_YET_RELEASED') setIsUpcoming(true);
-
-        const edges = media?.relations?.edges || [];
-        if (isMounted) {
-          const altList = edges.map((edge) => ({
-            id: String(edge.node.id),
-            title: edge.node.title?.english || edge.node.title?.romaji || 'Untitled',
-            coverImage: edge.node.coverImage?.extraLarge || edge.node.coverImage?.large,
-            relationType: edge.relationType || 'RELATED',
-            format: edge.node.format || 'TV',
-            score: edge.node.averageScore ? `★ ${edge.node.averageScore}%` : 'N/A',
-            year: edge.node.seasonYear || 'N/A'
-          }));
-          setAlternates(altList);
-        }
-      } catch (_) {}
-    };
-
-    loadMeta();
-    return () => { isMounted = false; };
-  }, [currentAnime.title]);
-
-  // 4. Guaranteed Stream Navigation Logic
-  const handlePlayEpisode = async (episodeItem) => {
-    try {
-      setLoadingEpisode(episodeItem.epNumber);
-
-      // We explicitly pass the episode's "slug" (e.g. "1")
-      const safeSlug = encodeURIComponent(episodeItem.slug);
-      const streamUrl = `${VERCEL_API_BASE}/api/stream?id=${safeSlug}&server=hd-1&type=sub`;
+    if (tapDelay < 300) {
+      const touchX = evt.nativeEvent.locationX;
+      const screenHalf = Dimensions.get('window').width / 2;
       
-      const res = await fetchWithTimeout(streamUrl, {}, 6000);
-      const json = await res.json();
-
-      let streamManifest = null;
-      
-      // Parse exact response schema provided
-      if (json?.success && json?.data?.m3u8) {
-        streamManifest = json.data;
-      } 
-      // Handle fallback schema variations
-      else if (json?.success && json?.results?.streamingLink) {
-        streamManifest = { m3u8: json.results.streamingLink };
-      }
-
-      // If valid, pass to player
-      if (streamManifest?.m3u8) {
-        navigation.navigate('Player', {
-          streamUrl: streamManifest.m3u8,
-          animeTitle: currentAnime.title,
-          episodeNum: episodeItem.epNumber,
-          episodeTitle: episodeItem.title,
-          animeId: currentAnime.id,
-          userUid: user?.uid
-        });
+      if (touchX > screenHalf) {
+        seekForward();
+        triggerSkipIndicator('right');
       } else {
-        alert("Streaming source currently empty. Trying another server may help.");
+        seekBackward();
+        triggerSkipIndicator('left');
       }
-    } catch (e) {
-      alert("Failed to connect to streaming server.");
-    } finally {
-      setLoadingEpisode(null);
+    } else {
+      resetHideTimer();
     }
   };
 
-  const renderHeader = () => (
-    <View style={styles.heroContainer}>
-      {/* VERTICAL POSTER BACKGROUND */}
-      <View style={styles.backdropWrapper}>
-        <ProxyImage source={{ uri: currentAnime.coverImage || currentAnime.backdrop }} style={styles.backdropImage} resizeMode="cover" />
-        
-        {/* Soft bottom dark gradient */}
-        <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
-          <Defs>
-            <LinearGradient id="heroGradient" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0" stopColor="#050505" stopOpacity="0.05" />
-              <Stop offset="0.45" stopColor="#050505" stopOpacity="0.5" />
-              <Stop offset="0.75" stopColor="#050505" stopOpacity="0.95" />
-              <Stop offset="1" stopColor="#050505" stopOpacity="1" />
-            </LinearGradient>
-          </Defs>
-          <Rect width="100%" height="100%" fill="url(#heroGradient)" />
-        </Svg>
-      </View>
+  const triggerSkipIndicator = (direction) => {
+    setShowSkipIndicator(direction);
+    setTimeout(() => setShowSkipIndicator(null), 600);
+  };
 
-      <View style={styles.heroContent}>
-        {/* TMDB TITLE LOGO */}
-        <View style={styles.logoContainer}>
-          {titleLogo ? (
-            <ProxyImage source={{ uri: titleLogo }} style={styles.titleLogo} resizeMode="contain" />
-          ) : (
-            <Text style={styles.titleText}>{currentAnime.title}</Text>
-          )}
-        </View>
+  const togglePlayPause = () => {
+    if (!videoRef.current) return;
+    status.isPlaying ? videoRef.current.pauseAsync() : videoRef.current.playAsync();
+    resetHideTimer();
+  };
 
-        {/* METADATA ROW */}
-        <View style={styles.inlineMetaRow}>
-          {isUpcoming ? (
-            <View style={styles.upcomingBadge}><Text style={styles.upcomingBadgeText}>UPCOMING</Text></View>
-          ) : (
-            <View style={styles.newBadge}><Text style={styles.newBadgeText}>New Episode</Text></View>
-          )}
-          <View style={styles.ratingBadge}><Text style={styles.ratingText}>{currentAnime.rating || 'U/A 16+'}</Text></View>
-          <Text style={styles.metaScore}>★ {currentAnime.score || 85}%</Text>
-        </View>
+  const seekBackward = async () => {
+    if (!videoRef.current || !status.isLoaded) return;
+    const newPos = Math.max(0, status.positionMillis - 10000);
+    await videoRef.current.setPositionAsync(newPos);
+    resetHideTimer();
+  };
 
-        {/* PRIMARY PLAY BUTTON */}
-        <TouchableOpacity 
-          style={[styles.playButton, (episodes.length === 0 || isUpcoming) && { opacity: 0.5 }]} 
-          activeOpacity={0.85}
-          onPress={() => {
-            if (episodes.length > 0) {
-              const target = episodes.find(e => e.epNumber === userProgress.episodeNum) || episodes[0];
-              handlePlayEpisode(target);
-            }
-          }}
-          disabled={episodes.length === 0 || isUpcoming}
-        >
-          <Text style={styles.playButtonText}>
-            {isUpcoming ? 'Not Yet Released' : (userProgress.episodeNum ? `Resume Episode ${userProgress.episodeNum}` : 'Watch Now')}
-          </Text>
-          {!isUpcoming && episodes.length > 0 && <IconPlay size={18} color="#000" />}
+  const seekForward = async () => {
+    if (!videoRef.current || !status.isLoaded) return;
+    const newPos = Math.min(status.durationMillis, status.positionMillis + 10000);
+    await videoRef.current.setPositionAsync(newPos);
+    resetHideTimer();
+  };
+
+  const handleSliderValueChange = async (val) => {
+    if (!videoRef.current || !status.isLoaded) return;
+    await videoRef.current.setPositionAsync(val);
+    resetHideTimer();
+  };
+
+  const toggleResizeMode = () => {
+    setResizeMode(prev => prev === ResizeMode.CONTAIN ? ResizeMode.COVER : ResizeMode.CONTAIN);
+    resetHideTimer();
+  };
+
+  const formatTime = (millis) => {
+    if (isNaN(millis)) return "00:00";
+    const totalSecs = Math.floor(millis / 1000);
+    const h = Math.floor(totalSecs / 3600);
+    const m = Math.floor((totalSecs % 3600) / 60).toString().padStart(2, '0');
+    const s = (totalSecs % 60).toString().padStart(2, '0');
+    return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
+  };
+
+  if (!proxiedUri) {
+    return (
+      <View style={styles.errorContainer}>
+        <FontAwesome5 name="exclamation-triangle" size={40} color={BRAND_RED} style={{marginBottom: 15}} />
+        <Text style={styles.errorText}>Invalid Stream Data</Text>
+        <TouchableOpacity style={styles.errorBtn} onPress={handleClosePlayer}>
+          <Text style={styles.errorBtnText}>Go Back</Text>
         </TouchableOpacity>
-
-        {/* ACTION ROW */}
-        <View style={styles.actionsRow}>
-          <TouchableOpacity style={styles.actionBtn} onPress={toggleLibrary} activeOpacity={0.7}>
-            {inLibrary ? <IconCheck /> : <IconPlus />}
-            <Text style={styles.actionText}>Watchlist</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.actionBtn} activeOpacity={0.7}>
-            <IconDownload />
-            <Text style={styles.actionText}>Download</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.actionBtn} onPress={() => Share.share({ message: `Watch ${currentAnime.title} on Kameko!` })} activeOpacity={0.7}>
-            <IconShare />
-            <Text style={styles.actionText}>Share</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* SYNOPSIS */}
-        <View style={styles.synopsisContainer}>
-          <Text style={styles.synopsisText} numberOfLines={descExpanded ? undefined : 3}>
-            {currentAnime.description}
-          </Text>
-          {currentAnime.description?.length > 120 && (
-            <TouchableOpacity onPress={() => setDescExpanded(!descExpanded)} activeOpacity={0.7} style={styles.seeMoreBtn}>
-              <Text style={styles.seeMoreText}>{descExpanded ? 'Less Details' : 'More Details'} <Text style={{fontSize: 10}}>{descExpanded ? '▲' : '▼'}</Text></Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* TABS */}
-        <View style={styles.tabHeader}>
-          <TouchableOpacity 
-            style={[styles.tabBtn, activeTab === 'episodes' && styles.tabBtnActive]} 
-            onPress={() => setActiveTab('episodes')}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.tabText, activeTab === 'episodes' && styles.tabTextActive]}>
-              Episodes {episodes.length > 0 ? `(${episodes.length})` : ''}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={[styles.tabBtn, activeTab === 'alternates' && styles.tabBtnActive]} 
-            onPress={() => setActiveTab('alternates')}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.tabText, activeTab === 'alternates' && styles.tabTextActive]}>
-              Alternates {alternates.length > 0 ? `(${alternates.length})` : ''}
-            </Text>
-          </TouchableOpacity>
-        </View>
       </View>
-    </View>
-  );
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent={true} />
-
-      {/* TOP FLOATING NAV */}
-      <View style={styles.topNav}>
-        <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
-          <Defs>
-            <LinearGradient id="topNavGrad" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
-              <Stop offset="0.6" stopColor="#000000" stopOpacity="0.4" />
-              <Stop offset="1" stopColor="#000000" stopOpacity="0" />
-            </LinearGradient>
-          </Defs>
-          <Rect width="100%" height="100%" fill="url(#topNavGrad)" />
-        </Svg>
-
-        <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => navigation?.goBack())}>
-          <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5"><Path d="M15 18l-6-6 6-6" /></Svg>
-        </TouchableOpacity>
-      </View>
-
-      <Animated.FlatList
-        data={activeTab === 'episodes' ? episodes : alternates}
-        keyExtractor={(item, idx) => `${item.id}-${idx}`}
-        ListHeaderComponent={renderHeader}
-        ListEmptyComponent={() => (
-          <View style={styles.emptyState}>
-            {episodesLoading && activeTab === 'episodes' ? (
-              <View style={styles.loadingBox}>
-                <ActivityIndicator size="small" color={BRAND_RED} />
-                <Text style={styles.loadingText}>Fetching episodes...</Text>
-              </View>
-            ) : (
-              <Text style={styles.emptyStateText}>
-                {activeTab === 'episodes' 
-                  ? (isUpcoming ? 'This series is upcoming and has not broadcasted episodes yet.' : 'No episodes found for this series.')
-                  : 'No related seasons or media indexed.'}
-              </Text>
-            )}
-          </View>
-        )}
-        renderItem={({ item }) => {
-          if (activeTab === 'episodes') {
-            const isLoadingThis = loadingEpisode === item.epNumber;
-            return (
-              <TouchableOpacity style={styles.epCard} activeOpacity={0.8} onPress={() => handlePlayEpisode(item)}>
-                <View style={styles.epTopRow}>
-                  <View style={styles.epImageWrapper}>
-                    <ProxyImage source={{ uri: item.still }} style={styles.epThumbnail} resizeMode="cover" />
-                    <View style={styles.epPlayOverlay}>
-                      {isLoadingThis ? <ActivityIndicator size="small" color="#FFF" /> : <IconPlay size={16} color="#FFF" />}
-                    </View>
-                  </View>
-                  <View style={styles.epMeta}>
-                    <Text style={styles.epTitle} numberOfLines={1}>{item.epNumber}. {item.title}</Text>
-                    <Text style={styles.epDuration}>{item.duration}</Text>
-                  </View>
-                </View>
-                <Text style={styles.epDesc} numberOfLines={2}>{item.desc}</Text>
-              </TouchableOpacity>
-            );
-          } else {
-            return (
-              <TouchableOpacity style={styles.altCard} activeOpacity={0.8} onPress={() => { navigation?.push ? navigation.push('Play', { anime: item }) : (onBack && onBack()); }}>
-                <ProxyImage source={{ uri: item.coverImage }} style={styles.altThumbnail} resizeMode="cover" />
-                <View style={styles.altMeta}>
-                  <View style={styles.altBadge}><Text style={styles.altBadgeText}>{item.relationType}</Text></View>
-                  <Text style={styles.altTitle} numberOfLines={2}>{item.title}</Text>
-                  <Text style={styles.altSub}>{item.format} • {item.year} • {item.score}</Text>
-                </View>
-              </TouchableOpacity>
-            );
-          }
+      
+      {/* NATIVE EXPO AV VIDEO ENGINE */}
+      <Video
+        ref={videoRef}
+        style={styles.videoPlayer}
+        source={{ uri: proxiedUri }}
+        useNativeControls={false}
+        resizeMode={resizeMode}
+        onPlaybackStatusUpdate={status => {
+          setStatus(status);
+          if (status.isLoaded && !isReady) setIsReady(true);
         }}
-        contentContainerStyle={styles.listPadding}
-        showsVerticalScrollIndicator={false}
-        overScrollMode="never"
-        bounces={false}
+        shouldPlay
       />
+
+      {/* BUFFERING SPINNER */}
+      {(!isReady || status.isBuffering) && (
+        <View style={styles.loaderContainer}>
+          <ActivityIndicator size="large" color={BRAND_RED} />
+        </View>
+      )}
+
+      {/* INVISIBLE GESTURE LAYER */}
+      <TouchableWithoutFeedback onPress={handleTouchOverlay}>
+        <View style={StyleSheet.absoluteFillObject} />
+      </TouchableWithoutFeedback>
+
+      {/* DOUBLE TAP ANIMATIONS */}
+      {showSkipIndicator === 'left' && (
+        <View style={styles.skipLeftInd}>
+          <FontAwesome5 name="backward" size={30} color="#FFF" />
+          <Text style={styles.skipText}>-10s</Text>
+        </View>
+      )}
+      {showSkipIndicator === 'right' && (
+        <View style={styles.skipRightInd}>
+          <FontAwesome5 name="forward" size={30} color="#FFF" />
+          <Text style={styles.skipText}>+10s</Text>
+        </View>
+      )}
+
+      {/* UI OVERLAY LAYER */}
+      <Animated.View 
+        style={[styles.uiLayer, { opacity: uiOpacity }]} 
+        pointerEvents={showUI ? 'auto' : 'none'}
+      >
+        
+        {/* TOP BAR */}
+        <View style={styles.topBar}>
+          <TouchableOpacity onPress={handleClosePlayer} style={styles.backBtn} hitSlop={{top:20, bottom:20, left:20, right:20}}>
+            <FontAwesome5 name="arrow-left" size={20} color="#FFF" />
+          </TouchableOpacity>
+          <View>
+            <Text style={styles.animeTitle}>{animeTitle}</Text>
+            <Text style={styles.episodeTitle}>Episode {episodeNum} {episodeTitle ? `• ${episodeTitle}` : ''}</Text>
+          </View>
+        </View>
+
+        {/* CENTER PLAY/PAUSE */}
+        <View style={styles.centerControls} pointerEvents="box-none">
+          <TouchableOpacity onPress={togglePlayPause} style={styles.playPauseBtn} activeOpacity={0.8}>
+            <FontAwesome5 name={status.isPlaying ? "pause" : "play"} size={34} color="#FFF" style={!status.isPlaying && {marginLeft: 6}} />
+          </TouchableOpacity>
+        </View>
+
+        {/* BOTTOM BAR */}
+        <View style={styles.bottomBar}>
+          <View style={styles.progressBarRow}>
+            <Text style={styles.timeText}>{formatTime(status.positionMillis || 0)}</Text>
+            
+            <Slider
+              style={styles.slider}
+              minimumValue={0}
+              maximumValue={status.durationMillis || 100}
+              value={status.positionMillis || 0}
+              minimumTrackTintColor={BRAND_RED}
+              maximumTrackTintColor="rgba(255,255,255,0.3)"
+              thumbTintColor={BRAND_RED}
+              onSlidingComplete={handleSliderValueChange}
+              onSlidingStart={() => { if (hideUITimeout.current) clearTimeout(hideUITimeout.current); }}
+            />
+            
+            <Text style={styles.timeText}>{formatTime(status.durationMillis || 0)}</Text>
+          </View>
+          
+          <View style={styles.actionRow}>
+            {/* Display Subtitle Count Icon if Subtitles are available */}
+            {subtitles.length > 0 && (
+              <TouchableOpacity style={styles.actionBtn}>
+                <Text style={{color: BRAND_RED, fontSize: 10, fontWeight: '900', position: 'absolute', top: -5, right: 0}}>{subtitles.length}</Text>
+                <FontAwesome5 name="closed-captioning" size={20} color="#FFF" />
+              </TouchableOpacity>
+            )}
+            
+            <TouchableOpacity style={styles.actionBtn}>
+              <FontAwesome5 name="cog" size={20} color="#FFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionBtn} onPress={toggleResizeMode}>
+              <FontAwesome5 name={resizeMode === ResizeMode.CONTAIN ? "expand" : "compress"} size={18} color="#FFF" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+      </Animated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#050505' },
-  topNav: { position: 'absolute', top: 0, left: 0, right: 0, height: 110, zIndex: 100, paddingTop: 45, paddingHorizontal: 16 },
-  navBackBtn: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20, alignSelf: 'flex-start' },
+  container: { flex: 1, backgroundColor: '#000' },
+  videoPlayer: { ...StyleSheet.absoluteFillObject },
+  loaderContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 5 },
+  errorContainer: { flex: 1, backgroundColor: '#050505', justifyContent: 'center', alignItems: 'center' },
+  errorText: { color: '#FFF', fontSize: 16, fontWeight: 'bold', marginBottom: 20 },
+  errorBtn: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 6 },
+  errorBtnText: { color: '#FFF', fontWeight: 'bold' },
+
+  uiLayer: { ...StyleSheet.absoluteFillObject, zIndex: 10, justifyContent: 'space-between', backgroundColor: 'rgba(0,0,0,0.35)' },
   
-  heroContainer: { width: '100%' },
-  backdropWrapper: { width: '100%', height: height * 0.65, position: 'absolute', top: 0, left: 0 },
-  backdropImage: { width: '100%', height: '100%' },
+  topBar: { flexDirection: 'row', alignItems: 'center', padding: 25, paddingTop: 40, width: '100%', backgroundColor: 'rgba(0,0,0,0.6)' },
+  backBtn: { marginRight: 20 },
+  animeTitle: { color: '#FFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.5 },
+  episodeTitle: { color: '#AAA', fontSize: 12, fontWeight: '600', marginTop: 2 },
   
-  heroContent: { paddingTop: height * 0.40, paddingHorizontal: 20 },
-  logoContainer: { width: '100%', alignItems: 'center', marginBottom: 15 },
-  titleLogo: { width: width * 0.8, height: 110 },
-  titleText: { color: '#FFF', fontSize: 32, fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: {width: 0, height: 2}, textShadowRadius: 8 },
+  centerControls: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  playPauseBtn: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
   
-  inlineMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 20 },
-  newBadge: { backgroundColor: BRAND_RED, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
-  newBadgeText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
-  upcomingBadge: { backgroundColor: '#FF8C00', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
-  upcomingBadgeText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
-  ratingBadge: { backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
-  ratingText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
-  metaScore: { color: '#CCC', fontSize: 12, fontWeight: 'bold' },
+  skipLeftInd: { position: 'absolute', left: 80, top: '45%', alignItems: 'center', zIndex: 5, backgroundColor: 'rgba(0,0,0,0.5)', padding: 15, borderRadius: 40 },
+  skipRightInd: { position: 'absolute', right: 80, top: '45%', alignItems: 'center', zIndex: 5, backgroundColor: 'rgba(0,0,0,0.5)', padding: 15, borderRadius: 40 },
+  skipText: { color: '#FFF', fontSize: 14, fontWeight: '900', marginTop: 5 },
 
-  playButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: BRAND_RED, paddingVertical: 14, borderRadius: 6, marginBottom: 25 },
-  playButtonText: { color: '#FFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.5 },
-
-  actionsRow: { flexDirection: 'row', justifyContent: 'center', gap: 40, width: '100%', marginBottom: 25 },
-  actionBtn: { alignItems: 'center', gap: 6 },
-  actionText: { color: '#AAA', fontSize: 10, fontWeight: '600' },
-
-  synopsisContainer: { marginBottom: 20 },
-  synopsisText: { color: '#E0E0E0', fontSize: 13, lineHeight: 20 },
-  seeMoreBtn: { marginTop: 6 },
-  seeMoreText: { color: BRAND_RED, fontSize: 12, fontWeight: 'bold' },
-
-  tabHeader: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#222', marginBottom: 15 },
-  tabBtn: { paddingVertical: 12, paddingHorizontal: 15 },
-  tabBtnActive: { borderBottomWidth: 3, borderBottomColor: BRAND_RED },
-  tabText: { color: '#777', fontSize: 15, fontWeight: 'bold' },
-  tabTextActive: { color: '#FFF' },
-
-  listPadding: { paddingBottom: 60 },
-  epCard: { paddingHorizontal: 20, marginBottom: 18 },
-  epTopRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  epImageWrapper: { width: 130, height: 75, borderRadius: 4, overflow: 'hidden', backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
-  epThumbnail: { width: '100%', height: '100%', position: 'absolute' },
-  epPlayOverlay: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.6)', borderWidth: 1, borderColor: '#FFF', justifyContent: 'center', alignItems: 'center' },
-  epMeta: { flex: 1, marginLeft: 15, justifyContent: 'center' },
-  epTitle: { color: '#FFF', fontSize: 14, fontWeight: 'bold', marginBottom: 3 },
-  epDuration: { color: '#888', fontSize: 12 },
-  epDesc: { color: '#999', fontSize: 12, lineHeight: 17 },
-
-  altCard: { flexDirection: 'row', paddingHorizontal: 20, marginBottom: 15, alignItems: 'center' },
-  altThumbnail: { width: 80, height: 110, borderRadius: 6, backgroundColor: '#1A1A1A' },
-  altMeta: { flex: 1, marginLeft: 16, justifyContent: 'center' },
-  altBadge: { backgroundColor: 'rgba(229,9,20,0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start', marginBottom: 6, borderWidth: 1, borderColor: 'rgba(229,9,20,0.4)' },
-  altBadgeText: { color: BRAND_RED, fontSize: 9, fontWeight: '900', textTransform: 'uppercase' },
-  altTitle: { color: '#FFF', fontSize: 15, fontWeight: 'bold', marginBottom: 5 },
-  altSub: { color: '#888', fontSize: 12, fontWeight: '600' },
+  bottomBar: { width: '100%', paddingHorizontal: 30, paddingBottom: 35, paddingTop: 20, backgroundColor: 'rgba(0,0,0,0.7)' },
+  progressBarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
+  timeText: { color: '#FFF', fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  slider: { flex: 1, marginHorizontal: 15, height: 40 },
   
-  emptyState: { paddingVertical: 45, alignItems: 'center' },
-  emptyStateText: { color: '#777', fontSize: 13, textAlign: 'center', paddingHorizontal: 35 },
-  loadingBox: { alignItems: 'center', gap: 10 },
-  loadingText: { color: '#888', fontSize: 12 }
+  actionRow: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 25 },
+  actionBtn: { padding: 5, position: 'relative' }
 });
