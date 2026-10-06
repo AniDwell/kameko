@@ -2,18 +2,20 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, Dimensions, 
   TouchableOpacity, Animated, Share, StatusBar, 
-  ActivityIndicator 
+  ActivityIndicator
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
 import ProxyImage from '../components/ProxyImage';
+
+// THIS FIXES THE CRASH: Importing global navigation hook
+import { useNavigation } from '@react-navigation/native';
 
 const { width, height } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
-// Safe Network Fetch
 const fetchWithTimeout = async (url, options = {}, timeoutMs = 10000) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -27,14 +29,17 @@ const fetchWithTimeout = async (url, options = {}, timeoutMs = 10000) => {
   }
 };
 
-// SVG ICONS
 const IconPlay = ({ size = 18, color = "#000" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>);
 const IconPlus = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M12 5v14M5 12h14" /></Svg>);
 const IconCheck = ({ size = 24, color = BRAND_RED }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="3"><Path d="M20 6L9 17l-5-5" /></Svg>);
 const IconShare = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" /></Svg>);
 const IconDownload = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></Svg>);
 
-export default function Play({ anime, user, onBack, navigation }) {
+export default function Play({ anime, user, onBack }) {
+
+  // INITIALIZING GLOBAL NAVIGATION (Fixes undefined navigate error)
+  const nav = useNavigation();
+
   const currentAnime = anime || {
     id: 'solo-leveling',
     title: 'Solo Leveling',
@@ -62,17 +67,13 @@ export default function Play({ anime, user, onBack, navigation }) {
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
-  // Sync Library & Progress
   useEffect(() => {
     if (!user || !currentAnime?.id) return;
     const animeDocId = String(currentAnime.id);
-
     const libRef = firestore().collection('users').doc(user.uid).collection('library').doc(animeDocId);
     const libUnsub = libRef.onSnapshot(doc => setInLibrary(doc?.exists || false), () => {});
-
     const progRef = firestore().collection('users').doc(user.uid).collection('progress').doc(animeDocId);
     const progUnsub = progRef.onSnapshot(doc => { if (doc?.exists) setUserProgress(doc.data()); }, () => {});
-
     return () => { libUnsub(); progUnsub(); };
   }, [user, currentAnime?.id]);
 
@@ -86,31 +87,24 @@ export default function Play({ anime, user, onBack, navigation }) {
     }
   };
 
-  // Fetch Episodes
   useEffect(() => {
     let isMounted = true;
-
     const loadEpisodes = async () => {
       setEpisodesLoading(true);
-
       if (currentAnime.status?.toUpperCase() === 'UPCOMING' || currentAnime.status?.toUpperCase() === 'NOT_YET_RELEASED') {
         if (isMounted) { setIsUpcoming(true); setEpisodes([]); setEpisodesLoading(false); }
         return;
       }
-
       try {
         let epData = [];
         let targetId = currentAnime.id;
-
         const searchRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`, {}, 4000);
         const searchJson = await searchRes.json();
         const matches = searchJson?.data || searchJson?.results || [];
-        
         if (matches.length > 0) {
           const exact = matches.find(m => (m.title || '').toLowerCase() === currentAnime.title.toLowerCase()) || matches[0];
           targetId = exact.id;
         }
-
         if (isMounted) setVercelAnimeId(targetId);
 
         const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetId)}`, {}, 4000);
@@ -140,12 +134,10 @@ export default function Play({ anime, user, onBack, navigation }) {
         if (isMounted) setEpisodesLoading(false);
       }
     };
-
     loadEpisodes();
     return () => { isMounted = false; };
   }, [currentAnime.id, currentAnime.title]);
 
-  // Background Metadata
   useEffect(() => {
     let isMounted = true;
     const loadMeta = async () => {
@@ -154,7 +146,6 @@ export default function Play({ anime, user, onBack, navigation }) {
         const tmdbRes = await fetchWithTimeout(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(cleanTitle)}`, {}, 4000);
         const tmdbJson = await tmdbRes.json();
         const show = tmdbJson?.results?.[0];
-
         if (show && isMounted) {
           const imgRes = await fetchWithTimeout(`https://api.themoviedb.org/3/tv/${show.id}/images?api_key=${TMDB_API_KEY}`, {}, 4000);
           const imgJson = await imgRes.json();
@@ -168,7 +159,6 @@ export default function Play({ anime, user, onBack, navigation }) {
         const aRes = await fetchWithTimeout('https://graphql.anilist.co', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: aniQuery, variables: { search: currentAnime.title } }) }, 4000);
         const aJson = await aRes.json();
         const media = aJson?.data?.Media;
-
         if (media?.status && isMounted && media.status === 'NOT_YET_RELEASED') setIsUpcoming(true);
 
         const edges = media?.relations?.edges || [];
@@ -190,7 +180,6 @@ export default function Play({ anime, user, onBack, navigation }) {
     return () => { isMounted = false; };
   }, [currentAnime.title]);
 
-  // Guaranteed Stream Navigation Logic
   const handlePlayEpisode = async (episodeItem) => {
     try {
       setLoadingEpisode(episodeItem.epNumber);
@@ -199,39 +188,32 @@ export default function Play({ anime, user, onBack, navigation }) {
       const safeEp = encodeURIComponent(String(episodeItem.epNumber));
 
       const streamUrl = `${VERCEL_API_BASE}/api/stream?id=${safeId}&ep=${safeEp}&server=hd-1&type=sub`;
-      
       const res = await fetchWithTimeout(streamUrl, {}, 10000);
       const json = await res.json();
 
-      let m3u8 = null;
-      let subtitles = [];
-      let referer = "https://megaplay.buzz/";
-
+      let streamManifest = null;
       if (json?.success && json?.data?.m3u8) {
-        m3u8 = json.data.m3u8;
-        subtitles = json.data.subtitles || [];
-        if(json.data.referer) referer = json.data.referer;
+        streamManifest = json.data;
       } else if (json?.success && json?.results?.streamingLink) {
-        m3u8 = json.results.streamingLink;
+        streamManifest = json.results;
       } else if (json?.data?.streamingLink) {
-        m3u8 = json.data.streamingLink;
+        streamManifest = json.data;
       }
 
-      if (!m3u8) {
-        alert('Streaming source not found. Please try another episode.');
+      if (!streamManifest?.m3u8 && !streamManifest?.streamingLink) {
+        alert('Streaming source not found.');
         return;
       }
 
-      // Explicit Prop Check to prevent crashes
-      if (!navigation || !navigation.navigate) {
-        alert('Navigation prop missing. Please ensure home.js passes the navigation prop to Play.js');
-        return;
-      }
+      const finalStreamUrl = streamManifest.m3u8 || streamManifest.streamingLink;
+      const finalReferer = streamManifest.referer || "https://vidwish.live/";
+      const finalSubtitles = streamManifest.subtitles || [];
 
-      navigation.navigate('Player', {
-        streamUrl: m3u8,
-        referer: referer,
-        subtitles: subtitles,
+      // USING GLOBAL NAVIGATION INSTEAD OF PROPS TO PREVENT CRASH
+      nav.navigate('Player', {
+        streamUrl: finalStreamUrl,
+        referer: finalReferer,
+        subtitles: finalSubtitles,
         animeTitle: currentAnime.title,
         episodeNum: episodeItem.epNumber,
         episodeTitle: episodeItem.title,
@@ -255,7 +237,6 @@ export default function Play({ anime, user, onBack, navigation }) {
           <Defs>
             <LinearGradient id="heroGradient" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor="#050505" stopOpacity="0.05" />
-              <Stop offset="0.45" stopColor="#050505" stopOpacity="0.5" />
               <Stop offset="0.75" stopColor="#050505" stopOpacity="0.95" />
               <Stop offset="1" stopColor="#050505" stopOpacity="1" />
             </LinearGradient>
@@ -351,7 +332,7 @@ export default function Play({ anime, user, onBack, navigation }) {
           </Defs>
           <Rect width="100%" height="100%" fill="url(#topNavGrad)" />
         </Svg>
-        <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => navigation?.goBack())}>
+        <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => nav.goBack())}>
           <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5"><Path d="M15 18l-6-6 6-6" /></Svg>
         </TouchableOpacity>
       </View>
@@ -396,7 +377,7 @@ export default function Play({ anime, user, onBack, navigation }) {
             );
           } else {
             return (
-              <TouchableOpacity style={styles.altCard} activeOpacity={0.8} onPress={() => { navigation?.push ? navigation.push('Play', { anime: item }) : (onBack && onBack()); }}>
+              <TouchableOpacity style={styles.altCard} activeOpacity={0.8} onPress={() => { nav.push ? nav.push('Play', { anime: item }) : (onBack && onBack()); }}>
                 <ProxyImage source={{ uri: item.coverImage }} style={styles.altThumbnail} resizeMode="cover" />
                 <View style={styles.altMeta}>
                   <View style={styles.altBadge}><Text style={styles.altBadgeText}>{item.relationType}</Text></View>
