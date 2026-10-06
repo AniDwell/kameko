@@ -53,7 +53,8 @@ const HorizontalRow = ({ title }) => (
   </View>
 );
 
-export default function Home({ user, activeProfile, onSwitchProfile }) {
+// Added navigation to the props
+export default function Home({ user, activeProfile, onSwitchProfile, navigation }) {
   const [activeTab, setActiveTab] = useState('Home');
   const [selectedAnime, setSelectedAnime] = useState(null);
 
@@ -146,6 +147,7 @@ export default function Home({ user, activeProfile, onSwitchProfile }) {
           anime={selectedAnime} 
           user={user} 
           onBack={() => setSelectedAnime(null)} 
+          navigation={navigation} /* <--- Added navigation prop here */
         />
       )}
 
