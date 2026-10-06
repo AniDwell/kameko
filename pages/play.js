@@ -8,7 +8,7 @@ import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
 import ProxyImage from '../components/ProxyImage';
 
-// THIS FIXES THE CRASH: Importing global navigation hook
+// IMPORT GLOBAL NAVIGATION TO FIX THE UNDEFINED NAV CRASH
 import { useNavigation } from '@react-navigation/native';
 
 const { width, height } = Dimensions.get('window');
@@ -16,6 +16,7 @@ const BRAND_RED = '#E50914';
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
+// Safe Network Fetch
 const fetchWithTimeout = async (url, options = {}, timeoutMs = 10000) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -29,6 +30,7 @@ const fetchWithTimeout = async (url, options = {}, timeoutMs = 10000) => {
   }
 };
 
+// SVG ICONS
 const IconPlay = ({ size = 18, color = "#000" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>);
 const IconPlus = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M12 5v14M5 12h14" /></Svg>);
 const IconCheck = ({ size = 24, color = BRAND_RED }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="3"><Path d="M20 6L9 17l-5-5" /></Svg>);
@@ -37,7 +39,7 @@ const IconDownload = ({ size = 22, color = "#FFF" }) => (<Svg width={size} heigh
 
 export default function Play({ anime, user, onBack }) {
   
-  // INITIALIZING GLOBAL NAVIGATION (Fixes undefined error)
+  // GLOBAL NAVIGATION INSTANCE
   const nav = useNavigation();
 
   const currentAnime = anime || {
@@ -67,13 +69,17 @@ export default function Play({ anime, user, onBack }) {
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
+  // Sync Library & Progress
   useEffect(() => {
     if (!user || !currentAnime?.id) return;
     const animeDocId = String(currentAnime.id);
+
     const libRef = firestore().collection('users').doc(user.uid).collection('library').doc(animeDocId);
     const libUnsub = libRef.onSnapshot(doc => setInLibrary(doc?.exists || false), () => {});
+
     const progRef = firestore().collection('users').doc(user.uid).collection('progress').doc(animeDocId);
     const progUnsub = progRef.onSnapshot(doc => { if (doc?.exists) setUserProgress(doc.data()); }, () => {});
+
     return () => { libUnsub(); progUnsub(); };
   }, [user, currentAnime?.id]);
 
@@ -87,14 +93,18 @@ export default function Play({ anime, user, onBack }) {
     }
   };
 
+  // Fetch Episodes
   useEffect(() => {
     let isMounted = true;
+
     const loadEpisodes = async () => {
       setEpisodesLoading(true);
+
       if (currentAnime.status?.toUpperCase() === 'UPCOMING' || currentAnime.status?.toUpperCase() === 'NOT_YET_RELEASED') {
         if (isMounted) { setIsUpcoming(true); setEpisodes([]); setEpisodesLoading(false); }
         return;
       }
+
       try {
         let epData = [];
         let targetId = currentAnime.id;
@@ -102,6 +112,7 @@ export default function Play({ anime, user, onBack }) {
         const searchRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`, {}, 4000);
         const searchJson = await searchRes.json();
         const matches = searchJson?.data || searchJson?.results || [];
+        
         if (matches.length > 0) {
           const exact = matches.find(m => (m.title || '').toLowerCase() === currentAnime.title.toLowerCase()) || matches[0];
           targetId = exact.id;
@@ -136,10 +147,12 @@ export default function Play({ anime, user, onBack }) {
         if (isMounted) setEpisodesLoading(false);
       }
     };
+
     loadEpisodes();
     return () => { isMounted = false; };
   }, [currentAnime.id, currentAnime.title]);
 
+  // Background Metadata
   useEffect(() => {
     let isMounted = true;
     const loadMeta = async () => {
@@ -148,6 +161,7 @@ export default function Play({ anime, user, onBack }) {
         const tmdbRes = await fetchWithTimeout(`https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(cleanTitle)}`, {}, 4000);
         const tmdbJson = await tmdbRes.json();
         const show = tmdbJson?.results?.[0];
+
         if (show && isMounted) {
           const imgRes = await fetchWithTimeout(`https://api.themoviedb.org/3/tv/${show.id}/images?api_key=${TMDB_API_KEY}`, {}, 4000);
           const imgJson = await imgRes.json();
@@ -161,6 +175,7 @@ export default function Play({ anime, user, onBack }) {
         const aRes = await fetchWithTimeout('https://graphql.anilist.co', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: aniQuery, variables: { search: currentAnime.title } }) }, 4000);
         const aJson = await aRes.json();
         const media = aJson?.data?.Media;
+
         if (media?.status && isMounted && media.status === 'NOT_YET_RELEASED') setIsUpcoming(true);
 
         const edges = media?.relations?.edges || [];
@@ -182,6 +197,7 @@ export default function Play({ anime, user, onBack }) {
     return () => { isMounted = false; };
   }, [currentAnime.title]);
 
+  // Guaranteed Stream Navigation Logic
   const handlePlayEpisode = async (episodeItem) => {
     try {
       setLoadingEpisode(episodeItem.epNumber);
@@ -190,32 +206,33 @@ export default function Play({ anime, user, onBack }) {
       const safeEp = encodeURIComponent(String(episodeItem.epNumber));
 
       const streamUrl = `${VERCEL_API_BASE}/api/stream?id=${safeId}&ep=${safeEp}&server=hd-1&type=sub`;
+      
       const res = await fetchWithTimeout(streamUrl, {}, 10000);
       const json = await res.json();
 
-      let streamManifest = null;
+      let m3u8 = null;
+      let subtitles = [];
+      let referer = "https://megaplay.buzz/";
+
       if (json?.success && json?.data?.m3u8) {
-        streamManifest = json.data;
+        m3u8 = json.data.m3u8;
+        subtitles = json.data.subtitles || [];
+        if(json.data.referer) referer = json.data.referer;
       } else if (json?.success && json?.results?.streamingLink) {
-        streamManifest = json.results;
+        m3u8 = json.results.streamingLink;
       } else if (json?.data?.streamingLink) {
-        streamManifest = json.data;
+        m3u8 = json.data.streamingLink;
       }
 
-      if (!streamManifest?.m3u8 && !streamManifest?.streamingLink) {
-        alert('Streaming source not found.');
+      if (!m3u8) {
+        alert('Streaming source not found. Please try another episode.');
         return;
       }
 
-      const finalStreamUrl = streamManifest.m3u8 || streamManifest.streamingLink;
-      const finalReferer = streamManifest.referer || "https://vidwish.live/";
-      const finalSubtitles = streamManifest.subtitles || [];
-
-      // USING GLOBAL NAVIGATION INSTEAD OF PROPS
       nav.navigate('Player', {
-        streamUrl: finalStreamUrl,
-        referer: finalReferer,
-        subtitles: finalSubtitles,
+        streamUrl: m3u8,
+        referer: referer,
+        subtitles: subtitles,
         animeTitle: currentAnime.title,
         episodeNum: episodeItem.epNumber,
         episodeTitle: episodeItem.title,
@@ -239,6 +256,7 @@ export default function Play({ anime, user, onBack }) {
           <Defs>
             <LinearGradient id="heroGradient" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor="#050505" stopOpacity="0.05" />
+              <Stop offset="0.45" stopColor="#050505" stopOpacity="0.5" />
               <Stop offset="0.75" stopColor="#050505" stopOpacity="0.95" />
               <Stop offset="1" stopColor="#050505" stopOpacity="1" />
             </LinearGradient>
