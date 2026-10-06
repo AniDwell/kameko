@@ -8,9 +8,6 @@ import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
 import ProxyImage from '../components/ProxyImage';
 
-// IMPORT GLOBAL NAVIGATION TO FIX THE UNDEFINED NAV CRASH
-import { useNavigation } from '@react-navigation/native';
-
 const { width, height } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
@@ -37,11 +34,7 @@ const IconCheck = ({ size = 24, color = BRAND_RED }) => (<Svg width={size} heigh
 const IconShare = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" /></Svg>);
 const IconDownload = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></Svg>);
 
-export default function Play({ anime, user, onBack }) {
-  
-  // GLOBAL NAVIGATION INSTANCE
-  const nav = useNavigation();
-
+export default function Play({ anime, user, onBack, navigation }) {
   const currentAnime = anime || {
     id: 'solo-leveling',
     title: 'Solo Leveling',
@@ -229,7 +222,13 @@ export default function Play({ anime, user, onBack }) {
         return;
       }
 
-      nav.navigate('Player', {
+      // Explicit Prop Check to prevent crashes
+      if (!navigation || !navigation.navigate) {
+        alert('Navigation prop missing. Please ensure home.js passes the navigation prop to Play.js');
+        return;
+      }
+
+      navigation.navigate('Player', {
         streamUrl: m3u8,
         referer: referer,
         subtitles: subtitles,
@@ -352,7 +351,7 @@ export default function Play({ anime, user, onBack }) {
           </Defs>
           <Rect width="100%" height="100%" fill="url(#topNavGrad)" />
         </Svg>
-        <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => nav.goBack())}>
+        <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => navigation?.goBack())}>
           <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5"><Path d="M15 18l-6-6 6-6" /></Svg>
         </TouchableOpacity>
       </View>
@@ -397,7 +396,7 @@ export default function Play({ anime, user, onBack }) {
             );
           } else {
             return (
-              <TouchableOpacity style={styles.altCard} activeOpacity={0.8} onPress={() => { nav.push ? nav.push('Play', { anime: item }) : (onBack && onBack()); }}>
+              <TouchableOpacity style={styles.altCard} activeOpacity={0.8} onPress={() => { navigation?.push ? navigation.push('Play', { anime: item }) : (onBack && onBack()); }}>
                 <ProxyImage source={{ uri: item.coverImage }} style={styles.altThumbnail} resizeMode="cover" />
                 <View style={styles.altMeta}>
                   <View style={styles.altBadge}><Text style={styles.altBadgeText}>{item.relationType}</Text></View>
