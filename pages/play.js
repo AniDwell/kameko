@@ -2,11 +2,14 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, Dimensions, 
   TouchableOpacity, Animated, Share, StatusBar, 
-  ActivityIndicator
+  ActivityIndicator 
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
 import ProxyImage from '../components/ProxyImage';
+
+// THIS FIXES THE CRASH: Importing global navigation hook
+import { useNavigation } from '@react-navigation/native';
 
 const { width, height } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
@@ -32,7 +35,11 @@ const IconCheck = ({ size = 24, color = BRAND_RED }) => (<Svg width={size} heigh
 const IconShare = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" /></Svg>);
 const IconDownload = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></Svg>);
 
-export default function Play({ anime, user, onBack, navigation }) {
+export default function Play({ anime, user, onBack }) {
+  
+  // INITIALIZING GLOBAL NAVIGATION (Fixes undefined error)
+  const nav = useNavigation();
+
   const currentAnime = anime || {
     id: 'solo-leveling',
     title: 'Solo Leveling',
@@ -91,6 +98,7 @@ export default function Play({ anime, user, onBack, navigation }) {
       try {
         let epData = [];
         let targetId = currentAnime.id;
+
         const searchRes = await fetchWithTimeout(`${VERCEL_API_BASE}/api/search?keyword=${encodeURIComponent(currentAnime.title)}`, {}, 4000);
         const searchJson = await searchRes.json();
         const matches = searchJson?.data || searchJson?.results || [];
@@ -98,6 +106,7 @@ export default function Play({ anime, user, onBack, navigation }) {
           const exact = matches.find(m => (m.title || '').toLowerCase() === currentAnime.title.toLowerCase()) || matches[0];
           targetId = exact.id;
         }
+
         if (isMounted) setVercelAnimeId(targetId);
 
         const res = await fetchWithTimeout(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(targetId)}`, {}, 4000);
@@ -202,8 +211,8 @@ export default function Play({ anime, user, onBack, navigation }) {
       const finalReferer = streamManifest.referer || "https://vidwish.live/";
       const finalSubtitles = streamManifest.subtitles || [];
 
-      // Open Player with Full Network Data
-      navigation.navigate('Player', {
+      // USING GLOBAL NAVIGATION INSTEAD OF PROPS
+      nav.navigate('Player', {
         streamUrl: finalStreamUrl,
         referer: finalReferer,
         subtitles: finalSubtitles,
@@ -325,7 +334,7 @@ export default function Play({ anime, user, onBack, navigation }) {
           </Defs>
           <Rect width="100%" height="100%" fill="url(#topNavGrad)" />
         </Svg>
-        <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => navigation?.goBack())}>
+        <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => nav.goBack())}>
           <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5"><Path d="M15 18l-6-6 6-6" /></Svg>
         </TouchableOpacity>
       </View>
@@ -370,7 +379,7 @@ export default function Play({ anime, user, onBack, navigation }) {
             );
           } else {
             return (
-              <TouchableOpacity style={styles.altCard} activeOpacity={0.8} onPress={() => { navigation?.push ? navigation.push('Play', { anime: item }) : (onBack && onBack()); }}>
+              <TouchableOpacity style={styles.altCard} activeOpacity={0.8} onPress={() => { nav.push ? nav.push('Play', { anime: item }) : (onBack && onBack()); }}>
                 <ProxyImage source={{ uri: item.coverImage }} style={styles.altThumbnail} resizeMode="cover" />
                 <View style={styles.altMeta}>
                   <View style={styles.altBadge}><Text style={styles.altBadgeText}>{item.relationType}</Text></View>
