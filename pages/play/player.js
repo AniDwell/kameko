@@ -11,10 +11,7 @@ import firestore from '@react-native-firebase/firestore';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
-
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
-// YOUR MANDATORY PROXY
-const CUSTOM_PROXY_URL = 'https://icy-wave-30d8.prashant-yash69.workers.dev/proxy?url=';
 
 export default function Player({ route, navigation }) {
   const { 
@@ -39,7 +36,6 @@ export default function Player({ route, navigation }) {
 
   // Network & Stream State
   const [streamData, setStreamData] = useState(null);
-  const [proxiedUri, setProxiedUri] = useState(null);
   const [loadingStream, setLoadingStream] = useState(true);
   const [fatalError, setFatalError] = useState(null);
 
@@ -58,7 +54,7 @@ export default function Player({ route, navigation }) {
     setLogs(prev => [...prev, `[${timestamp}] [${type}] ${msg}`]);
   };
 
-  // 1. Hardware Initialization (No Screen Orientation to prevent crash)
+  // 1. Hardware Initialization
   useEffect(() => {
     StatusBar.setHidden(true);
     const backHandler = BackHandler.addEventListener('hardwareBackPress', handleClosePlayer);
@@ -74,7 +70,7 @@ export default function Player({ route, navigation }) {
     return true;
   };
 
-  // 2. Exact Network Resolution Engine (Mirroring web player.js)
+  // 2. Network Resolution Engine
   useEffect(() => {
     let isMounted = true;
 
@@ -126,16 +122,11 @@ export default function Player({ route, navigation }) {
         return;
       }
 
+      // We bypass the web proxy and prepare data for Native Header Injection
+      addLog(`Stream Found: ${finalStreamData.m3u8}`);
+      addLog(`Injecting Referer: ${finalStreamData.referer || 'https://vidwish.live/'}`);
+      
       setStreamData(finalStreamData);
-      
-      const streamUrl = finalStreamData.m3u8; 
-      const targetReferer = finalStreamData.referer || "https://vidwish.live/";
-      const builtProxyUri = `${CUSTOM_PROXY_URL}${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetReferer)}`;
-      
-      addLog(`Stream URL: ${streamUrl}`);
-      addLog(`Proxy URL: ${builtProxyUri}`);
-      
-      setProxiedUri(builtProxyUri);
       setLoadingStream(false);
     };
 
@@ -145,20 +136,18 @@ export default function Player({ route, navigation }) {
 
   // 3. Custom VTT Subtitle Parser Engine
   useEffect(() => {
-    if (!streamData || !streamData.subtitles || streamData.subtitles.length === 0) {
-      return;
-    }
+    if (!streamData || !streamData.subtitles || streamData.subtitles.length === 0) return;
 
     const loadSubtitles = async () => {
       try {
         const subUrl = streamData.subtitles[0].file;
-        addLog(`Fetching VTT Subtitles: ${subUrl}`);
+        addLog(`Fetching VTT Subtitles...`);
         
         const response = await fetch(subUrl);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         
         const vttText = await response.text();
-        addLog(`VTT Fetched. Size: ${vttText.length} chars. Parsing...`);
+        addLog(`VTT Fetched. Parsing...`);
         
         const cues = [];
         const blocks = vttText.split(/\r?\n\r?\n/);
@@ -192,9 +181,9 @@ export default function Player({ route, navigation }) {
         }
         
         setParsedSubs(cues);
-        addLog(`Parsed ${cues.length} subtitle cues successfully.`, "SUCCESS");
+        addLog(`Parsed ${cues.length} subtitle cues.`, "SUCCESS");
       } catch (err) {
-        addLog(`Subtitle Fetch Error: ${err.message}`, "ERROR");
+        addLog(`Subtitle Error: ${err.message}`, "ERROR");
       }
     };
 
@@ -226,7 +215,7 @@ export default function Player({ route, navigation }) {
         duration: durationSecs,
         finishedEp: isCompleted,
         timestamp: Date.now()
-      }, { merge: true }).catch(() => addLog("Firebase silent sync failed.", "WARN"));
+      }, { merge: true }).catch(() => addLog("Firebase sync failed.", "WARN"));
     }
   }, [status.positionMillis, subtitlesEnabled]);
 
@@ -313,18 +302,17 @@ export default function Player({ route, navigation }) {
     const newSpeed = playbackSpeed === 1.0 ? 1.25 : playbackSpeed === 1.25 ? 1.5 : playbackSpeed === 1.5 ? 2.0 : 1.0;
     await videoRef.current.setRateAsync(newSpeed, true);
     setPlaybackSpeed(newSpeed);
-    addLog(`Playback speed set to ${newSpeed}x`);
+    addLog(`Speed set to ${newSpeed}x`);
   };
 
   const toggleResizeMode = () => {
     const newMode = resizeMode === ResizeMode.CONTAIN ? ResizeMode.COVER : ResizeMode.CONTAIN;
     setResizeMode(newMode);
-    addLog(`Resize Mode changed to ${newMode === ResizeMode.CONTAIN ? 'Contain' : 'Cover'}`);
     resetHideTimer();
   };
 
   const handleVideoError = (error) => {
-    addLog(`VIDEO ENGINE FATAL ERROR: ${error}`, "ERROR");
+    addLog(`VIDEO FATAL ERROR: ${error}`, "ERROR");
     setFatalError(error);
   };
 
@@ -337,12 +325,11 @@ export default function Player({ route, navigation }) {
     return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
   };
 
-  // INITIAL LOAD STATE
   if (loadingStream) {
     return (
       <View style={styles.loaderContainerFull}>
         <ActivityIndicator size="large" color={BRAND_RED} />
-        <Text style={styles.bufferText}>Connecting to Server...</Text>
+        <Text style={styles.bufferText}>Resolving Stream...</Text>
         <ScrollView style={styles.bootLogScroll}>
           {logs.map((l, idx) => (
             <Text key={idx} style={styles.bootLogText}>{l}</Text>
@@ -352,8 +339,7 @@ export default function Player({ route, navigation }) {
     );
   }
 
-  // ERROR STATE
-  if (fatalError || !proxiedUri) {
+  if (fatalError || !streamData) {
     return (
       <View style={styles.errorContainer}>
         <FontAwesome5 name="exclamation-triangle" size={40} color={BRAND_RED} style={{marginBottom: 15}} />
@@ -369,10 +355,18 @@ export default function Player({ route, navigation }) {
   return (
     <View style={styles.container}>
       
+      {/* NATIVE HEADER INJECTION (Bypasses DRM/Referer checks natively without breaking Extractors) */}
       <Video
         ref={videoRef}
         style={styles.videoPlayer}
-        source={{ uri: proxiedUri }}
+        source={{ 
+          uri: streamData.m3u8,
+          headers: {
+            "Referer": streamData.referer || "https://vidwish.live/",
+            "Origin": streamData.referer ? new URL(streamData.referer).origin : "https://vidwish.live",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+          }
+        }}
         useNativeControls={false}
         resizeMode={resizeMode}
         onError={handleVideoError}
@@ -380,7 +374,7 @@ export default function Player({ route, navigation }) {
           setStatus(status);
           if (status.isLoaded && !isReady) {
             setIsReady(true);
-            addLog("Video Stream Buffered and Ready.", "SUCCESS");
+            addLog("Stream Extracted and Ready.", "SUCCESS");
           }
           if (status.error) addLog(`Playback Error: ${status.error}`, "ERROR");
         }}
@@ -396,7 +390,7 @@ export default function Player({ route, navigation }) {
       {(!isReady || status.isBuffering) && (
         <View style={styles.loaderContainer}>
           <ActivityIndicator size="large" color={BRAND_RED} />
-          <Text style={styles.bufferText}>Buffering Stream...</Text>
+          <Text style={styles.bufferText}>Buffering...</Text>
         </View>
       )}
 
@@ -420,7 +414,7 @@ export default function Player({ route, navigation }) {
       {showLogs && (
         <View style={styles.logOverlay}>
           <View style={styles.logHeader}>
-            <Text style={styles.logTitle}><FontAwesome5 name="terminal" size={12}/> ENGINE LIVE LOGS</Text>
+            <Text style={styles.logTitle}><FontAwesome5 name="terminal" size={12}/> LIVE LOGS</Text>
             <TouchableOpacity onPress={() => setShowLogs(false)}><FontAwesome5 name="times" color="#FFF" size={16}/></TouchableOpacity>
           </View>
           <ScrollView style={styles.logScroll}>
@@ -450,7 +444,7 @@ export default function Player({ route, navigation }) {
 
         {showSettings && (
           <View style={styles.settingsMenu}>
-            <Text style={styles.settingsTitle}>Playback Settings</Text>
+            <Text style={styles.settingsTitle}>Settings</Text>
             <TouchableOpacity style={styles.settingRow} onPress={changeSpeed}>
               <Text style={styles.settingLabel}><FontAwesome5 name="tachometer-alt"/> Speed</Text>
               <Text style={styles.settingValue}>{playbackSpeed}x</Text>
@@ -459,12 +453,12 @@ export default function Player({ route, navigation }) {
               <Text style={styles.settingLabel}><FontAwesome5 name="expand"/> Fit Video</Text>
               <Text style={styles.settingValue}>{resizeMode === ResizeMode.CONTAIN ? 'Contain' : 'Cover'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.settingRow} onPress={() => { setSubtitlesEnabled(!subtitlesEnabled); addLog(`Subtitles toggled ${!subtitlesEnabled}`); }}>
+            <TouchableOpacity style={styles.settingRow} onPress={() => { setSubtitlesEnabled(!subtitlesEnabled); addLog(`Subtitles ${!subtitlesEnabled}`); }}>
               <Text style={styles.settingLabel}><FontAwesome5 name="closed-captioning"/> Subtitles</Text>
               <Text style={styles.settingValue}>{subtitlesEnabled ? 'ON' : 'OFF'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.settingRow} onPress={() => { setShowLogs(true); setShowSettings(false); }}>
-              <Text style={styles.settingLabel}><FontAwesome5 name="bug"/> Show Debug Logs</Text>
+              <Text style={styles.settingLabel}><FontAwesome5 name="bug"/> Debug Logs</Text>
               <FontAwesome5 name="chevron-right" color="#FFF" size={12}/>
             </TouchableOpacity>
           </View>
@@ -515,7 +509,7 @@ const styles = StyleSheet.create({
   
   errorContainer: { flex: 1, backgroundColor: '#050505', justifyContent: 'center', alignItems: 'center' },
   errorText: { color: '#FFF', fontSize: 16, fontWeight: 'bold', marginBottom: 5 },
-  errorSubText: { color: '#EF4444', fontSize: 10, fontFamily: 'monospace', marginBottom: 20 },
+  errorSubText: { color: '#EF4444', fontSize: 10, fontFamily: 'monospace', marginBottom: 20, textAlign: 'center', paddingHorizontal: 20 },
   errorBtn: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 6 },
   errorBtnText: { color: '#FFF', fontWeight: 'bold' },
 
