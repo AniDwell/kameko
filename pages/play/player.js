@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, Animated, 
   Dimensions, ActivityIndicator, StatusBar, BackHandler,
-  TouchableWithoutFeedback, PanResponder
+  TouchableWithoutFeedback, PanResponder, ScrollView
 } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -12,43 +12,9 @@ import Svg, { Path, Circle, Rect, Defs, LinearGradient, Stop } from 'react-nativ
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
-const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
-// --- IN-MEMORY CACHE ---
-const tmdbCache = {
-  seriesQueries: new Map(),    // normalizedTitle -> { tmdbId, details }
-  seasonMaps: new Map(),       // tmdbId -> [{ seasonNumber, episodeCount, totalPrior }]
-  episodeData: new Map()       // `tmdb_episode_${tmdbId}_${season}_${episode}` -> epMetadata
-};
-
-// --- STRING MATCHING & NORMALIZATION ENGINE ---
-const cleanTitle = (str = '') => {
-  return str
-    .toLowerCase()
-    .replace(/\(dub\)|\(sub\)|\(uncensored\)|season \d+|part \d+/gi, '')
-    .replace(/[^a-z0-9\s]/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-};
-
-const calculateSimilarity = (s1, s2) => {
-  const norm1 = cleanTitle(s1);
-  const norm2 = cleanTitle(s2);
-  if (norm1 === norm2) return 1.0;
-  if (!norm1 || !norm2) return 0.0;
-
-  const words1 = new Set(norm1.split(' '));
-  const words2 = new Set(norm2.split(' '));
-  const intersection = new Set([...words1].filter(x => words2.has(x)));
-  const union = new Set([...words1, ...words2]);
-  
-  const jaccard = intersection.size / union.size;
-  const startsWithBonus = norm1.startsWith(norm2) || norm2.startsWith(norm1) ? 0.2 : 0;
-  return Math.min(1.0, jaccard + startsWithBonus);
-};
-
-// --- SVG ICONS ---
+// --- PREMIUM SVG ICONS ---
 const IconPlay = ({ size = 26, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>);
 const IconPause = ({ size = 26, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></Svg>);
 const IconBackward = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" /></Svg>);
@@ -56,7 +22,9 @@ const IconForward = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height
 const IconSettings = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Circle cx="12" cy="12" r="3"/><Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></Svg>);
 const IconSubs = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Rect x="3" y="5" width="18" height="14" rx="2" ry="2"/><Path d="M7 15h3m4 0h3M7 9h10"/></Svg>);
 const IconSkip = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M5 4l10 8-10 8V4z"/><Path d="M19 5v14"/></Svg>);
-const IconBack = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5"><Path d="M19 12H5M12 19l-7-7 7-7"/></Svg>);
+const IconBack = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><Path d="M19 12H5M12 19l-7-7 7-7"/></Svg>);
+const IconChevronRight = ({ size = 16, color = "#888" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><Path d="M9 18l6-6-6-6" /></Svg>);
+const IconClose = ({ size = 20, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><Path d="M18 6L6 18M6 6l12 12" /></Svg>);
 
 export default function Player({ route, navigation }) {
   const { 
@@ -69,50 +37,54 @@ export default function Player({ route, navigation }) {
   } = route?.params || {};
 
   const videoRef = useRef(null);
+  
+  // UI Animation Refs
   const uiOpacity = useRef(new Animated.Value(1)).current;
-  const infoOverlayOpacity = useRef(new Animated.Value(0)).current;
   const skipIntroOpacity = useRef(new Animated.Value(0)).current;
+  const gestureToastOpacity = useRef(new Animated.Value(0)).current;
+  const panelTranslateX = useRef(new Animated.Value(450)).current;
+  const panelBackdropOpacity = useRef(new Animated.Value(0)).current;
 
   const [status, setStatus] = useState({});
-  const [isReady, setIsReady] = useState(false);
   const [showUI, setShowUI] = useState(true);
   const [resizeMode, setResizeMode] = useState(ResizeMode.CONTAIN);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
-  const [showSkipIndicator, setShowSkipIndicator] = useState(null);
+  const [showSkipIndicator, setShowSkipIndicator] = useState(null); 
 
-  // Settings & Subs Styling
-  const [activeMenu, setActiveMenu] = useState(null);
+  // Settings Menus & Side Drawers
+  const [activeMenu, setActiveMenu] = useState(null); // 'main', 'quality', 'subs'
   const [subColor, setSubColor] = useState('#FFFFFF');
   const [subSize, setSubSize] = useState(16);
   const [subHeight, setSubHeight] = useState(30);
 
-  // Stream Resolution
+  // Network & Stream State
   const [streamData, setStreamData] = useState(null);
   const [loadingStream, setLoadingStream] = useState(true);
   const [fatalError, setFatalError] = useState(null);
 
-  // TMDB Metadata State
-  const [metaLoading, setMetaLoading] = useState(true);
-  const [tmdbMeta, setTmdbMeta] = useState(null);
+  // Quality State
+  const [selectedQuality, setSelectedQuality] = useState('Auto');
+  const [currentAutoRes, setCurrentAutoRes] = useState('1080p');
 
-  // Gestures
+  // Gestures (Volume / Brightness)
   const [brightnessOverlay, setBrightnessOverlay] = useState(0); 
   const [volume, setVolume] = useState(1.0); 
   const [gestureText, setGestureText] = useState(null);
 
-  // Intro Skip & Subtitles
+  // Skip Intro State
   const [introData, setIntroData] = useState({ start: 0, end: 0 });
   const [showSkipButton, setShowSkipButton] = useState(false);
   const skipTimerRef = useRef(null);
+
+  // Subtitles
   const [parsedSubs, setParsedSubs] = useState([]);
   const [currentSubText, setCurrentSubText] = useState('');
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
 
   const hideUITimeout = useRef(null);
-  const overlayTimerRef = useRef(null);
   const lastTapRef = useRef(0);
 
-  // --- 1. ORIENTATION & HARDWARE BACK ---
+  // 1. Force Landscape & Hardware Navigation
   useEffect(() => {
     async function lockOrientation() {
       try {
@@ -122,16 +94,23 @@ export default function Player({ route, navigation }) {
     }
     lockOrientation();
 
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleClosePlayer);
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (activeMenu) {
+        if (activeMenu === 'quality' || activeMenu === 'subs') openPanel('main');
+        else closePanel();
+        return true;
+      }
+      handleClosePlayer();
+      return true;
+    });
+
     return () => {
       ScreenOrientation.unlockAsync().catch(() => {});
       StatusBar.setHidden(false);
       backHandler.remove();
       if (skipTimerRef.current) clearTimeout(skipTimerRef.current);
-      if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
-      if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
     };
-  }, []);
+  }, [activeMenu]);
 
   const handleClosePlayer = async () => {
     await ScreenOrientation.unlockAsync().catch(() => {});
@@ -139,165 +118,7 @@ export default function Player({ route, navigation }) {
     return true;
   };
 
-  // --- 2. NETFLIX OVERLAY FADE LOGIC ---
-  const triggerNetflixOverlay = useCallback(() => {
-    if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
-    Animated.timing(infoOverlayOpacity, {
-      toValue: 1,
-      duration: 350,
-      useNativeDriver: true
-    }).start();
-
-    overlayTimerRef.current = setTimeout(() => {
-      Animated.timing(infoOverlayOpacity, {
-        toValue: 0,
-        duration: 500,
-        useNativeDriver: true
-      }).start();
-    }, 6000);
-  }, [infoOverlayOpacity]);
-
-  // --- 3. TMDB SEARCH, SCORING & SEASON MAPPING ENGINE ---
-  useEffect(() => {
-    let isCancelled = false;
-
-    const fetchAndMapTMDB = async () => {
-      setMetaLoading(true);
-      setTmdbMeta(null); // Prevent stale state leak
-
-      try {
-        const queryNorm = cleanTitle(animeTitle);
-        let seriesDetails = tmdbCache.seriesQueries.get(queryNorm);
-
-        if (!seriesDetails) {
-          const searchUrl = `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(animeTitle)}&include_adult=false`;
-          const sRes = await fetch(searchUrl);
-          const sJson = await sRes.json();
-          const results = sJson?.results || [];
-
-          if (results.length === 0) {
-            setMetaLoading(false);
-            return;
-          }
-
-          // Score results by similarity across English, Original, and Alternative titles
-          let bestMatch = null;
-          let highestScore = -1;
-
-          for (const item of results) {
-            const scoreName = calculateSimilarity(animeTitle, item.name || '');
-            const scoreOrig = calculateSimilarity(animeTitle, item.original_name || '');
-            const candidateScore = Math.max(scoreName, scoreOrig);
-
-            if (candidateScore > highestScore) {
-              highestScore = candidateScore;
-              bestMatch = item;
-            }
-          }
-
-          if (!bestMatch || highestScore < 0.25) {
-            setMetaLoading(false);
-            return;
-          }
-
-          // Fetch full series info with ratings
-          const detailUrl = `https://api.themoviedb.org/3/tv/${bestMatch.id}?api_key=${TMDB_API_KEY}&append_to_response=content_ratings,alternative_titles`;
-          const dRes = await fetch(detailUrl);
-          seriesDetails = await dRes.json();
-          tmdbCache.seriesQueries.set(queryNorm, seriesDetails);
-        }
-
-        if (isCancelled || !seriesDetails?.id) return;
-
-        // Build season distribution map (filtering out Season 0 specials)
-        let seasonDistribution = tmdbCache.seasonMaps.get(seriesDetails.id);
-        if (!seasonDistribution) {
-          const validSeasons = (seriesDetails.seasons || [])
-            .filter(s => s.season_number > 0)
-            .sort((a, b) => a.season_number - b.season_number);
-
-          let totalAcc = 0;
-          seasonDistribution = validSeasons.map(s => {
-            const entry = {
-              seasonNumber: s.season_number,
-              episodeCount: s.episode_count || 0,
-              priorTotal: totalAcc
-            };
-            totalAcc += (s.episode_count || 0);
-            return entry;
-          });
-          tmdbCache.seasonMaps.set(seriesDetails.id, seasonDistribution);
-        }
-
-        // Map global AniList episode number to TMDB { season, episode }
-        const globalEp = parseInt(episodeNum, 10) || 1;
-        let matchedSeason = 1;
-        let matchedEpisode = globalEp;
-        let foundInMap = false;
-
-        for (const s of seasonDistribution) {
-          if (globalEp > s.priorTotal && globalEp <= (s.priorTotal + s.episodeCount)) {
-            matchedSeason = s.seasonNumber;
-            matchedEpisode = globalEp - s.priorTotal;
-            foundInMap = true;
-            break;
-          }
-        }
-
-        // If AniList count overflows TMDB series (e.g. Sequel indexed separately on TMDB)
-        if (!foundInMap && seasonDistribution.length > 0) {
-          const lastSeason = seasonDistribution[seasonDistribution.length - 1];
-          matchedSeason = lastSeason.seasonNumber;
-          matchedEpisode = Math.max(1, globalEp - lastSeason.priorTotal);
-        }
-
-        // Fetch Episode Specific Metadata
-        const epCacheKey = `tmdb_episode_${seriesDetails.id}_${matchedSeason}_${matchedEpisode}`;
-        let episodeInfo = tmdbCache.episodeData.get(epCacheKey);
-
-        if (!episodeInfo) {
-          const epUrl = `https://api.themoviedb.org/3/tv/${seriesDetails.id}/season/${matchedSeason}/episode/${matchedEpisode}?api_key=${TMDB_API_KEY}`;
-          const epRes = await fetch(epUrl);
-          if (epRes.ok) {
-            episodeInfo = await epRes.json();
-            tmdbCache.episodeData.set(epCacheKey, episodeInfo);
-          }
-        }
-
-        if (isCancelled) return;
-
-        // Content Rating calculation
-        const ratings = seriesDetails.content_ratings?.results || [];
-        const inRating = ratings.find(r => r.iso_3166_1 === 'IN')?.rating;
-        const usRating = ratings.find(r => r.iso_3166_1 === 'US')?.rating;
-        const fallbackRating = ratings[0]?.rating || null;
-        const certification = inRating || usRating || fallbackRating;
-
-        // Series Genres
-        const genres = (seriesDetails.genres || []).map(g => g.name).slice(0, 3).join(' • ');
-
-        setTmdbMeta({
-          seasonNumber: matchedSeason,
-          episodeNumber: matchedEpisode,
-          title: episodeInfo?.name || episodeTitle || `Episode ${episodeNum}`,
-          overview: episodeInfo?.overview || seriesDetails.overview || '',
-          stillPath: episodeInfo?.still_path ? `https://image.tmdb.org/t/p/w500${episodeInfo.still_path}` : null,
-          certification,
-          genres
-        });
-        triggerNetflixOverlay();
-      } catch (err) {
-        // Resilient fallback: playback proceeds smoothly on network/API failure
-      } finally {
-        if (!isCancelled) setMetaLoading(false);
-      }
-    };
-
-    fetchAndMapTMDB();
-    return () => { isCancelled = true; };
-  }, [animeTitle, episodeNum, triggerNetflixOverlay]);
-
-  // --- 4. STREAM RESOLUTION ENGINE ---
+  // 2. Direct Network Resolution Engine (UNCHANGED AS REQUESTED)
   useEffect(() => {
     let isMounted = true;
 
@@ -333,7 +154,10 @@ export default function Player({ route, navigation }) {
         return;
       }
 
-      if (finalStreamData.intro) setIntroData(finalStreamData.intro);
+      if (finalStreamData.intro) {
+        setIntroData(finalStreamData.intro);
+      }
+
       setStreamData(finalStreamData);
       setLoadingStream(false);
     };
@@ -342,7 +166,7 @@ export default function Player({ route, navigation }) {
     return () => { isMounted = false; };
   }, [animeId, episodeNum, targetType]);
 
-  // --- 5. VTT SUBTITLE PARSER ---
+  // 3. Subtitle Engine
   useEffect(() => {
     if (!streamData?.subtitles || streamData.subtitles.length === 0) return;
 
@@ -364,14 +188,21 @@ export default function Player({ route, navigation }) {
             if (!ts) return 0;
             const parts = ts.split(':');
             let s = 0;
-            if (parts.length === 3) s = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2].replace(',', '.'));
-            else s = parseInt(parts[0], 10) * 60 + parseFloat(parts[1].replace(',', '.'));
+            if (parts.length === 3) {
+              s += parseInt(parts[0], 10) * 3600;
+              s += parseInt(parts[1], 10) * 60;
+              s += parseFloat(parts[2].replace(',', '.'));
+            } else if (parts.length === 2) {
+              s += parseInt(parts[0], 10) * 60;
+              s += parseFloat(parts[1].replace(',', '.'));
+            }
             return s * 1000;
           };
 
           const textLines = lines.slice(lines.indexOf(timeLine) + 1).filter(l => !l.startsWith('WEBVTT') && l.trim() !== '');
-          const clean = textLines.join('\n').replace(/<[^>]+>/g, '');
-          cues.push({ startMs: parseTime(startStr), endMs: parseTime(endStr), text: clean });
+          const cleanText = textLines.join('\n').replace(/<[^>]+>/g, ''); 
+
+          cues.push({ startMs: parseTime(startStr), endMs: parseTime(endStr), text: cleanText });
         }
         setParsedSubs(cues);
       } catch (_) {}
@@ -380,12 +211,18 @@ export default function Player({ route, navigation }) {
     loadSubtitles();
   }, [streamData]);
 
-  // --- 6. TICK (SUBS, SKIP INTRO, SYNC) ---
+  // 4. Playback Tick (Subtitle sync, Auto Skip Intro, Progress)
   useEffect(() => {
     if (!status.isLoaded) return;
     const currentMs = status.positionMillis || 0;
     const currentSecs = Math.floor(currentMs / 1000);
 
+    // Auto resolution badge detection
+    if (status.naturalSize?.height) {
+      setCurrentAutoRes(`${status.naturalSize.height}p`);
+    }
+
+    // Subtitle sync
     if (subtitlesEnabled && parsedSubs.length > 0) {
       const activeCue = parsedSubs.find(c => currentMs >= c.startMs && currentMs <= c.endMs);
       if (activeCue && activeCue.text !== currentSubText) setCurrentSubText(activeCue.text);
@@ -394,10 +231,11 @@ export default function Player({ route, navigation }) {
       setCurrentSubText('');
     }
 
+    // Skip intro timer logic
     if (introData.end > 0 && currentSecs >= introData.start && currentSecs < introData.end) {
       if (!showSkipButton && !skipTimerRef.current) {
         setShowSkipButton(true);
-        Animated.timing(skipIntroOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+        Animated.spring(skipIntroOpacity, { toValue: 1, useNativeDriver: true, tension: 80, friction: 9 }).start();
         skipTimerRef.current = setTimeout(() => {
           Animated.timing(skipIntroOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
             setShowSkipButton(false);
@@ -405,13 +243,16 @@ export default function Player({ route, navigation }) {
         }, 6000);
       }
     } else if (showSkipButton) {
-      Animated.timing(skipIntroOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setShowSkipButton(false));
+      Animated.timing(skipIntroOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
+        setShowSkipButton(false);
+      });
       if (skipTimerRef.current) {
         clearTimeout(skipTimerRef.current);
         skipTimerRef.current = null;
       }
     }
 
+    // Firestore Progress Sync
     const durationSecs = Math.floor((status.durationMillis || 1) / 1000);
     if (userUid && animeId && status.isPlaying && currentSecs > 0 && currentSecs % 10 === 0) {
       const isCompleted = currentSecs > (durationSecs * 0.85);
@@ -426,69 +267,98 @@ export default function Player({ route, navigation }) {
     }
   }, [status.positionMillis, subtitlesEnabled]);
 
-  // --- 7. SWIPE GESTURES ---
+  // 5. Swipe Gestures (Brightness on Left, Volume on Right)
   const panResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 15,
+      onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 15 && Math.abs(gestureState.dx) < 25,
       onPanResponderMove: (_, gestureState) => {
         const { moveX, dy } = gestureState;
         const isLeft = moveX < Dimensions.get('window').width / 2;
 
         if (isLeft) {
           setBrightnessOverlay(prev => {
-            let next = prev + (dy * 0.003);
+            let next = prev + (dy * 0.0035);
             next = Math.max(0, Math.min(next, 0.85));
-            setGestureText(`Brightness ${Math.round((1 - next) * 100)}%`);
+            setGestureText(`☀ Brightness ${Math.round((1 - next) * 100)}%`);
+            gestureToastOpacity.setValue(1);
             return next;
           });
         } else {
           setVolume(prev => {
             let next = prev - (dy * 0.005);
             next = Math.max(0, Math.min(next, 2.0));
-            if (videoRef.current) videoRef.current.setVolumeAsync(Math.min(next, 1.0));
-            setGestureText(`Volume ${Math.round(next * 100)}%`);
+            if (videoRef.current) {
+              videoRef.current.setVolumeAsync(Math.min(next, 1.0));
+            }
+            setGestureText(`🔊 Volume ${Math.round(next * 100)}%`);
+            gestureToastOpacity.setValue(1);
             return next;
           });
         }
       },
-      onPanResponderRelease: () => setTimeout(() => setGestureText(null), 1000)
+      onPanResponderRelease: () => {
+        Animated.timing(gestureToastOpacity, { toValue: 0, duration: 600, delay: 400, useNativeDriver: true }).start(() => {
+          setGestureText(null);
+        });
+      }
     })
   ).current;
 
-  // --- 8. UI VISIBILITY ENGINE ---
-  const showControls = () => {
+  // 6. UI Auto-Hide Engine
+  const resetHideTimer = useCallback(() => {
+    if (activeMenu) return; // Don't hide if menu is open
     setShowUI(true);
     Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
-    triggerNetflixOverlay();
-    resetHideTimer();
-  };
-
-  const hideControls = () => {
-    if (activeMenu) setActiveMenu(null);
-    Animated.timing(uiOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setShowUI(false));
-  };
-
-  const toggleControls = () => {
-    if (showUI) hideControls();
-    else showControls();
-  };
-
-  const resetHideTimer = () => {
     if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
+    
     hideUITimeout.current = setTimeout(() => {
       if (status.isPlaying && !activeMenu) {
-        hideControls();
+        Animated.timing(uiOpacity, { toValue: 0, duration: 400, useNativeDriver: true }).start(() => setShowUI(false));
       }
     }, 4500);
+  }, [activeMenu, status.isPlaying]);
+
+  useEffect(() => {
+    if (status.isPlaying) resetHideTimer();
+    else {
+      if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
+      setShowUI(true);
+      Animated.timing(uiOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    }
+  }, [status.isPlaying, activeMenu, resetHideTimer]);
+
+  // Drawer Panel Navigation
+  const openPanel = (panelName) => {
+    setActiveMenu(panelName);
+    if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
+
+    Animated.parallel([
+      Animated.spring(panelTranslateX, { toValue: 0, useNativeDriver: true, tension: 65, friction: 10 }),
+      Animated.timing(panelBackdropOpacity, { toValue: 1, duration: 250, useNativeDriver: true })
+    ]).start();
   };
 
+  const closePanel = () => {
+    Animated.parallel([
+      Animated.timing(panelTranslateX, { toValue: 450, duration: 220, useNativeDriver: true }),
+      Animated.timing(panelBackdropOpacity, { toValue: 0, duration: 220, useNativeDriver: true })
+    ]).start(() => {
+      setActiveMenu(null);
+      resetHideTimer();
+    });
+  };
+
+  // Double-tap & Tap Overlay
   const handleTouchOverlay = (evt) => {
+    if (activeMenu) { 
+      closePanel();
+      return; 
+    }
     const now = Date.now();
     const tapDelay = now - lastTapRef.current;
     lastTapRef.current = now;
 
     if (tapDelay < 300) {
-      if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
       const touchX = evt.nativeEvent.locationX;
       if (touchX > Dimensions.get('window').width / 2) {
         seekForward();
@@ -498,7 +368,12 @@ export default function Player({ route, navigation }) {
         triggerSkipIndicator('left');
       }
     } else {
-      toggleControls();
+      if (showUI) {
+        Animated.timing(uiOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setShowUI(false));
+        if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
+      } else {
+        resetHideTimer();
+      }
     }
   };
 
@@ -507,7 +382,7 @@ export default function Player({ route, navigation }) {
     setTimeout(() => setShowSkipIndicator(null), 600);
   };
 
-  // --- PLAYBACK DISPATCHERS ---
+  // Playback Operations
   const togglePlayPause = () => {
     if (!videoRef.current) return;
     status.isPlaying ? videoRef.current.pauseAsync() : videoRef.current.playAsync();
@@ -544,7 +419,7 @@ export default function Player({ route, navigation }) {
   if (loadingStream) {
     return (
       <View style={styles.loaderContainerFull}>
-        <ActivityIndicator size="large" color="#FFFFFF" />
+        <ActivityIndicator size="large" color={BRAND_RED} />
         <Text style={styles.loaderText}>Connecting to stream...</Text>
       </View>
     );
@@ -564,7 +439,7 @@ export default function Player({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* 1. NATIVE EXPO VIDEO */}
+      {/* NATIVE EXPO VIDEO ENGINE */}
       <Video
         ref={videoRef}
         style={styles.videoPlayer}
@@ -583,91 +458,57 @@ export default function Player({ route, navigation }) {
         shouldPlay
       />
 
-      {/* 2. BRIGHTNESS TINT OVERLAY */}
+      {/* HARDWARE BRIGHTNESS OVERLAY */}
       <View 
         style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${brightnessOverlay})` }]} 
         pointerEvents="none" 
       />
 
-      {/* 3. SUBTITLE RENDERING */}
+      {/* CUSTOM VTT SUBTITLE DISPLAY */}
       {subtitlesEnabled && currentSubText !== '' && (
-        <View style={[styles.subtitleContainer, { bottom: subHeight }]} pointerEvents="none">
+        <View style={[styles.subtitleContainer, { bottom: subHeight + (showUI ? 65 : 0) }]} pointerEvents="none">
           <Text style={[styles.subtitleText, { color: subColor, fontSize: subSize }]}>
             {currentSubText}
           </Text>
         </View>
       )}
 
-      {/* 4. NETFLIX-STYLE METADATA OVERLAY */}
-      {tmdbMeta && (
-        <Animated.View style={[styles.netflixOverlayWrapper, { opacity: infoOverlayOpacity }]} pointerEvents="none">
-          <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
-            <Defs>
-              <LinearGradient id="infoGrad" x1="0" y1="0" x2="1" y2="1">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
-                <Stop offset="0.6" stopColor="#000000" stopOpacity="0.45" />
-                <Stop offset="1" stopColor="#000000" stopOpacity="0" />
-              </LinearGradient>
-            </Defs>
-            <Rect width="100%" height="100%" fill="url(#infoGrad)" />
-          </Svg>
-          <View style={styles.netflixInfoCard}>
-            <View style={styles.metaRowHeader}>
-              {tmdbMeta.certification && (
-                <View style={styles.certBadge}>
-                  <Text style={styles.certBadgeText}>{tmdbMeta.certification}</Text>
-                </View>
-              )}
-              {tmdbMeta.genres ? <Text style={styles.genreTags}>{tmdbMeta.genres}</Text> : null}
-            </View>
-            <Text style={styles.metaEpisodeHeader} numberOfLines={1}>
-              S{tmdbMeta.seasonNumber} E{tmdbMeta.episodeNumber} — {tmdbMeta.title}
-            </Text>
-            {tmdbMeta.overview ? (
-              <Text style={styles.metaDescription} numberOfLines={3}>
-                {tmdbMeta.overview}
-              </Text>
-            ) : null}
-          </View>
-        </Animated.View>
-      )}
-
-      {/* 5. DYNAMIC WHITE BUFFERING SPINNER */}
+      {/* DYNAMIC WHITE BUFFERING SPINNER */}
       {(!status.isLoaded || status.isBuffering) && (
         <View style={styles.bufferingOverlay} pointerEvents="none">
           <ActivityIndicator size="large" color="#FFFFFF" />
         </View>
       )}
 
-      {/* 6. GESTURE TOAST NOTIFICATION */}
+      {/* SWIPE GESTURE TOAST */}
       {gestureText && (
-        <View style={styles.gestureIndicator} pointerEvents="none">
-          <Text style={styles.gestureText}>{gestureText}</Text>
-        </View>
+        <Animated.View style={[styles.gestureToastContainer, { opacity: gestureToastOpacity }]} pointerEvents="none">
+          <Text style={styles.gestureToastText}>{gestureText}</Text>
+        </Animated.View>
       )}
 
-      {/* 7. PAN RESPONDER & DOUBLE-TAP TOUCH SENSOR */}
+      {/* TOUCH & PAN RESPONDER LAYER */}
       <View {...panResponder.panHandlers} style={[StyleSheet.absoluteFillObject, { zIndex: 5 }]}>
         <TouchableWithoutFeedback onPress={handleTouchOverlay}>
           <View style={StyleSheet.absoluteFillObject} />
         </TouchableWithoutFeedback>
       </View>
 
-      {/* 8. SKIP SEEK TOASTS */}
+      {/* DOUBLE TAP ANIMATIONS */}
       {showSkipIndicator === 'left' && (
         <View style={styles.skipLeftInd} pointerEvents="none">
-          <IconBackward size={32} color="#FFF" />
+          <IconBackward size={36} color="#FFF" />
           <Text style={styles.skipText}>-10s</Text>
         </View>
       )}
       {showSkipIndicator === 'right' && (
         <View style={styles.skipRightInd} pointerEvents="none">
-          <IconForward size={32} color="#FFF" />
+          <IconForward size={36} color="#FFF" />
           <Text style={styles.skipText}>+10s</Text>
         </View>
       )}
 
-      {/* 9. FLOATING SKIP INTRO BUTTON */}
+      {/* DYNAMIC SKIP INTRO FLOATING BUTTON */}
       {showSkipButton && (
         <Animated.View style={[styles.skipIntroFloat, { opacity: skipIntroOpacity }]}>
           <TouchableOpacity 
@@ -676,44 +517,46 @@ export default function Player({ route, navigation }) {
             activeOpacity={0.8}
           >
             <Text style={styles.skipIntroText}>Skip Intro</Text>
-            <IconForward size={14} color="#000" />
+            <IconForward size={14} color="#FFF" />
           </TouchableOpacity>
         </Animated.View>
       )}
 
-      {/* 10. GRADIENT CONTROLS OVERLAY */}
-      <Animated.View style={[styles.uiLayer, { opacity: uiOpacity }]} pointerEvents={showUI ? 'auto' : 'none'}>
+      {/* UI OVERLAY LAYER */}
+      <Animated.View style={[styles.uiLayer, { opacity: uiOpacity }]} pointerEvents={showUI ? 'box-none' : 'none'}>
         
-        {/* TOP BAR WITH GRADIENT */}
-        <View style={styles.topBar}>
+        {/* TOP BAR WITH CINEMATIC GRADIENT */}
+        <View style={styles.topBarWrapper}>
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
-              <LinearGradient id="topG" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
+              <LinearGradient id="topCinematic" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.95" />
+                <Stop offset="0.65" stopColor="#000000" stopOpacity="0.5" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill="url(#topG)" />
+            <Rect width="100%" height="100%" fill="url(#topCinematic)" />
           </Svg>
-          <TouchableOpacity onPress={handleClosePlayer} style={styles.backBtn} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
-            <IconBack size={24} color="#FFF" />
-          </TouchableOpacity>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.animeTitle} numberOfLines={1}>{animeTitle}</Text>
-            <Text style={styles.episodeTitle}>
-              {tmdbMeta ? `Season ${tmdbMeta.seasonNumber} • Episode ${tmdbMeta.episodeNumber}` : `Episode ${episodeNum}`}
-            </Text>
+
+          <View style={styles.topBarContent}>
+            <TouchableOpacity onPress={handleClosePlayer} style={styles.backBtn} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
+              <IconBack size={24} color="#FFF" />
+            </TouchableOpacity>
+            <View style={styles.titleColumn}>
+              <Text style={styles.animeTitle} numberOfLines={1}>{animeTitle}</Text>
+              <Text style={styles.episodeTitle}>Episode {episodeNum} {episodeTitle ? `• ${episodeTitle}` : ''}</Text>
+            </View>
           </View>
         </View>
 
-        {/* CENTER PLAY/PAUSE */}
+        {/* CENTER CONTROLS */}
         <View style={styles.centerControls} pointerEvents="box-none">
           <TouchableOpacity onPress={seekBackward} style={styles.skipCircleBtn} activeOpacity={0.7}>
             <IconBackward size={28} color="#FFF" />
           </TouchableOpacity>
 
           <TouchableOpacity onPress={togglePlayPause} style={styles.playPauseBtn} activeOpacity={0.8}>
-            {status.isPlaying ? <IconPause size={34} color="#FFF" /> : <IconPlay size={34} color="#FFF" />}
+            {status.isPlaying ? <IconPause size={38} color="#FFF" /> : <IconPlay size={38} color="#FFF" />}
           </TouchableOpacity>
 
           <TouchableOpacity onPress={seekForward} style={styles.skipCircleBtn} activeOpacity={0.7}>
@@ -721,79 +564,17 @@ export default function Player({ route, navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* SETTINGS MENUS */}
-        {activeMenu === 'main' && (
-          <View style={styles.settingsMenu}>
-            <Text style={styles.menuHeader}>Settings</Text>
-            <TouchableOpacity style={styles.menuRow} onPress={() => setActiveMenu('subs')}>
-              <Text style={styles.menuText}>Subtitles Style</Text>
-              <Text style={styles.menuValue}>Customize ›</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.menuRow} onPress={() => {
-              const next = playbackSpeed === 1.0 ? 1.25 : playbackSpeed === 1.25 ? 1.5 : playbackSpeed === 1.5 ? 2.0 : 1.0;
-              setPlaybackSpeed(next);
-              videoRef.current?.setRateAsync(next, true);
-            }}>
-              <Text style={styles.menuText}>Speed</Text>
-              <Text style={styles.menuValue}>{playbackSpeed}x</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.menuRow} onPress={() => setResizeMode(resizeMode === ResizeMode.CONTAIN ? ResizeMode.COVER : ResizeMode.CONTAIN)}>
-              <Text style={styles.menuText}>Aspect Ratio</Text>
-              <Text style={styles.menuValue}>{resizeMode === ResizeMode.CONTAIN ? 'Fit' : 'Fill'}</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {activeMenu === 'subs' && (
-          <View style={styles.settingsMenu}>
-            <TouchableOpacity onPress={() => setActiveMenu('main')} style={{ marginBottom: 12 }}>
-              <Text style={styles.backMenuText}>‹ Back</Text>
-            </TouchableOpacity>
-            <Text style={styles.menuHeader}>Subtitle Styles</Text>
-
-            <Text style={styles.subMenuLabel}>Color</Text>
-            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
-              {['#FFFFFF', '#F47521', '#FACC15', '#4ADE80'].map(c => (
-                <TouchableOpacity 
-                  key={c} 
-                  onPress={() => setSubColor(c)} 
-                  style={[styles.colorDot, { backgroundColor: c }, subColor === c && styles.colorDotActive]} 
-                />
-              ))}
-            </View>
-
-            <Text style={styles.subMenuLabel}>Size</Text>
-            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
-              {[14, 16, 20, 24].map(s => (
-                <TouchableOpacity key={s} onPress={() => setSubSize(s)} style={[styles.stylePill, subSize === s && styles.stylePillActive]}>
-                  <Text style={[styles.stylePillText, subSize === s && { color: BRAND_RED }]}>{s}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.subMenuLabel}>Position Offset</Text>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              {[20, 35, 60].map(h => (
-                <TouchableOpacity key={h} onPress={() => setSubHeight(h)} style={[styles.stylePill, subHeight === h && styles.stylePillActive]}>
-                  <Text style={[styles.stylePillText, subHeight === h && { color: BRAND_RED }]}>{h}px</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* BOTTOM CONTROLS WITH GRADIENT */}
-        <View style={styles.bottomBar}>
+        {/* BOTTOM BAR WITH CINEMATIC GRADIENT */}
+        <View style={styles.bottomBarWrapper}>
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
-              <LinearGradient id="botG" x1="0" y1="1" x2="0" y2="0">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
+              <LinearGradient id="botCinematic" x1="0" y1="1" x2="0" y2="0">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.95" />
+                <Stop offset="0.75" stopColor="#000000" stopOpacity="0.6" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill="url(#botG)" />
+            <Rect width="100%" height="100%" fill="url(#botCinematic)" />
           </Svg>
 
           <View style={styles.progressBarRow}>
@@ -814,33 +595,138 @@ export default function Player({ route, navigation }) {
 
           <View style={styles.actionRow}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-              <TouchableOpacity onPress={() => setSubtitlesEnabled(!subtitlesEnabled)}>
-                <IconSubs size={22} color={subtitlesEnabled ? "#FFF" : "#666"} />
+              <TouchableOpacity onPress={() => setSubtitlesEnabled(!subtitlesEnabled)} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
+                <IconSubs size={22} color={subtitlesEnabled ? "#FFF" : "#555"} />
               </TouchableOpacity>
             </View>
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18 }}>
-              {introData.end > 0 && (
-                <TouchableOpacity 
-                  onPress={() => videoRef.current?.setPositionAsync(introData.end * 1000)}
-                  style={styles.miniSkipBtn}
-                >
-                  <Text style={styles.miniSkipText}>Skip Intro</Text>
-                </TouchableOpacity>
-              )}
-
-              <TouchableOpacity onPress={() => {/* Next episode navigation hook */}}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 20 }}>
+              <TouchableOpacity onPress={() => {/* Next Ep Hook */}} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
                 <IconSkip size={20} color="#FFF" />
               </TouchableOpacity>
 
-              <TouchableOpacity onPress={() => setActiveMenu(activeMenu ? null : 'main')}>
-                <IconSettings size={22} color={activeMenu ? BRAND_RED : "#FFF"} />
+              <TouchableOpacity onPress={() => openPanel('main')} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
+                <IconSettings size={22} color="#FFF" />
               </TouchableOpacity>
             </View>
           </View>
         </View>
-
       </Animated.View>
+
+      {/* SIDE DRAWER PANELS (SETTINGS / QUALITY / SUBS) */}
+      {activeMenu !== null && (
+        <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+          {/* Dismiss Backdrop */}
+          <TouchableWithoutFeedback onPress={closePanel}>
+            <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.6)', opacity: panelBackdropOpacity }]} />
+          </TouchableWithoutFeedback>
+
+          <Animated.View style={[styles.sideDrawerSurface, { transform: [{ translateX: panelTranslateX }] }]}>
+            
+            {activeMenu === 'main' && (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <View style={styles.panelHeaderRow}>
+                  <Text style={styles.panelHeaderTitle}>Settings</Text>
+                  <TouchableOpacity onPress={closePanel}>
+                    <IconClose size={20} color="#888" />
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity style={styles.drawerOptionRow} onPress={() => openPanel('quality')}>
+                  <Text style={styles.drawerOptionLabel}>Quality</Text>
+                  <View style={styles.subRouteIndicator}>
+                    <Text style={styles.drawerOptionValue}>{selectedQuality === 'Auto' ? `Auto (${currentAutoRes})` : selectedQuality}</Text>
+                    <IconChevronRight size={16} color="#888" />
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.drawerOptionRow} onPress={() => openPanel('subs')}>
+                  <Text style={styles.drawerOptionLabel}>Subtitles Style</Text>
+                  <View style={styles.subRouteIndicator}>
+                    <Text style={styles.drawerOptionValue}>Customize</Text>
+                    <IconChevronRight size={16} color="#888" />
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.drawerOptionRow} onPress={() => {
+                  const next = playbackSpeed === 1.0 ? 1.25 : playbackSpeed === 1.25 ? 1.5 : playbackSpeed === 1.5 ? 2.0 : 1.0;
+                  setPlaybackSpeed(next);
+                  videoRef.current?.setRateAsync(next, true);
+                }}>
+                  <Text style={styles.drawerOptionLabel}>Playback Speed</Text>
+                  <Text style={styles.drawerOptionValue}>{playbackSpeed}x</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.drawerOptionRow} onPress={() => setResizeMode(resizeMode === ResizeMode.CONTAIN ? ResizeMode.COVER : ResizeMode.CONTAIN)}>
+                  <Text style={styles.drawerOptionLabel}>Aspect Ratio</Text>
+                  <Text style={styles.drawerOptionValue}>{resizeMode === ResizeMode.CONTAIN ? 'Fit to Screen' : 'Fill Screen'}</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+
+            {activeMenu === 'quality' && (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <TouchableOpacity style={styles.drawerBackNavRow} onPress={() => openPanel('main')}>
+                  <IconBack size={18} color={BRAND_RED} />
+                  <Text style={styles.drawerBackNavText}>Settings</Text>
+                </TouchableOpacity>
+                <Text style={styles.panelHeaderTitle}>Video Quality</Text>
+
+                <TouchableOpacity style={styles.drawerSelectableRow} onPress={() => { setSelectedQuality('Auto'); closePanel(); }}>
+                  <Text style={[styles.drawerOptionLabel, selectedQuality === 'Auto' && styles.activeSelectedText]}>Auto ({currentAutoRes})</Text>
+                  {selectedQuality === 'Auto' && <Text style={{ color: BRAND_RED, fontWeight: 'bold' }}>✓</Text>}
+                </TouchableOpacity>
+
+                {['1080p', '720p', '480p', '360p'].map((q) => (
+                  <TouchableOpacity key={q} style={styles.drawerSelectableRow} onPress={() => { setSelectedQuality(q); closePanel(); }}>
+                    <Text style={[styles.drawerOptionLabel, selectedQuality === q && styles.activeSelectedText]}>{q}</Text>
+                    {selectedQuality === q && <Text style={{ color: BRAND_RED, fontWeight: 'bold' }}>✓</Text>}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+
+            {activeMenu === 'subs' && (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                <TouchableOpacity style={styles.drawerBackNavRow} onPress={() => openPanel('main')}>
+                  <IconBack size={18} color={BRAND_RED} />
+                  <Text style={styles.drawerBackNavText}>Settings</Text>
+                </TouchableOpacity>
+                <Text style={styles.panelHeaderTitle}>Subtitle Styles</Text>
+
+                <Text style={styles.subStyleSectionLabel}>Font Color</Text>
+                <View style={styles.colorPaletteCluster}>
+                  {['#FFFFFF', '#F47521', '#FACC15', '#4ADE80'].map(c => (
+                    <TouchableOpacity 
+                      key={c} 
+                      onPress={() => setSubColor(c)} 
+                      style={[styles.colorChip, { backgroundColor: c }, subColor === c && styles.colorChipActive]} 
+                    />
+                  ))}
+                </View>
+
+                <Text style={styles.subStyleSectionLabel}>Font Size</Text>
+                <View style={styles.choiceGroupRow}>
+                  {[14, 16, 20, 24].map(s => (
+                    <TouchableOpacity key={s} onPress={() => setSubSize(s)} style={[styles.choicePill, subSize === s && styles.choicePillActive]}>
+                      <Text style={[styles.choicePillText, subSize === s && { color: BRAND_RED }]}>{s}px</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.subStyleSectionLabel}>Position Offset</Text>
+                <View style={styles.choiceGroupRow}>
+                  {[20, 35, 60].map(h => (
+                    <TouchableOpacity key={h} onPress={() => setSubHeight(h)} style={[styles.choicePill, subHeight === h && styles.choicePillActive]}>
+                      <Text style={[styles.choicePillText, subHeight === h && { color: BRAND_RED }]}>{h}px</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            )}
+          </Animated.View>
+        </View>
+      )}
     </View>
   );
 }
@@ -853,72 +739,59 @@ const styles = StyleSheet.create({
   loaderText: { color: '#888', marginTop: 12, fontSize: 12, letterSpacing: 0.5 },
   bufferingOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 4 },
 
-  gestureIndicator: { position: 'absolute', top: 35, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.75)', paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20, zIndex: 20 },
-  gestureText: { color: '#FFF', fontSize: 13, fontWeight: 'bold' },
+  gestureToastContainer: { position: 'absolute', top: 30, alignSelf: 'center', backgroundColor: 'rgba(10,10,10,0.85)', paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', zIndex: 40 },
+  gestureToastText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
 
   subtitleContainer: { position: 'absolute', width: '100%', alignItems: 'center', zIndex: 9, paddingHorizontal: 30 },
-  subtitleText: { fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
+  subtitleText: { fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4, maxWidth: '90%', lineHeight: 22 },
 
-  // Netflix Information Overlay
-  netflixOverlayWrapper: {
-    position: 'absolute',
-    top: 75,
-    left: 25,
-    width: SCREEN_WIDTH * 0.45,
-    borderRadius: 8,
-    overflow: 'hidden',
-    padding: 14,
-    zIndex: 8
-  },
-  netflixInfoCard: { zIndex: 2 },
-  metaRowHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-  certBadge: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
-  certBadgeText: { color: '#FFF', fontSize: 9, fontWeight: 'bold' },
-  genreTags: { color: '#CCC', fontSize: 10, fontWeight: '600' },
-  metaEpisodeHeader: { color: '#FFF', fontSize: 14, fontWeight: 'bold', marginVertical: 4 },
-  metaDescription: { color: '#BBB', fontSize: 10, lineHeight: 14 },
-
-  // Controls Layer
   uiLayer: { ...StyleSheet.absoluteFillObject, zIndex: 10, justifyContent: 'space-between' },
-  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 25, paddingTop: 20, paddingBottom: 25, width: '100%' },
-  backBtn: { marginRight: 18 },
+  
+  topBarWrapper: { width: '100%', paddingTop: 20, paddingBottom: 35, paddingHorizontal: 25, position: 'absolute', top: 0 },
+  topBarContent: { flexDirection: 'row', alignItems: 'center' },
+  backBtn: { marginRight: 15 },
+  titleColumn: { marginLeft: 10, flex: 1 },
   animeTitle: { color: '#FFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.3 },
   episodeTitle: { color: '#AAA', fontSize: 11, fontWeight: '600', marginTop: 2 },
 
-  centerControls: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 40 },
-  playPauseBtn: { width: 68, height: 68, borderRadius: 34, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)' },
-  skipCircleBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
+  centerControls: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 50 },
+  playPauseBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.22)' },
+  skipCircleBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
 
-  skipLeftInd: { position: 'absolute', left: '16%', top: '44%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 18, borderRadius: 45 },
-  skipRightInd: { position: 'absolute', right: '16%', top: '44%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 18, borderRadius: 45 },
-  skipText: { color: '#FFF', fontSize: 12, fontWeight: 'bold', marginTop: 4 },
+  skipLeftInd: { position: 'absolute', left: '16%', top: '40%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.65)', padding: 20, borderRadius: 50, zIndex: 25 },
+  skipRightInd: { position: 'absolute', right: '16%', top: '40%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.65)', padding: 20, borderRadius: 50, zIndex: 25 },
+  skipText: { color: '#FFF', fontSize: 12, fontWeight: '700', marginTop: 4 },
 
   skipIntroFloat: { position: 'absolute', bottom: 100, right: 30, zIndex: 30 },
-  skipIntroBtnInner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 6, gap: 5 },
-  skipIntroText: { color: '#000', fontWeight: '900', fontSize: 11, textTransform: 'uppercase' },
+  skipIntroBtnInner: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(15,15,15,0.92)', paddingHorizontal: 16, paddingVertical: 9, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', gap: 8 },
+  skipIntroText: { color: '#FFF', fontWeight: '800', fontSize: 12, letterSpacing: 0.5 },
 
-  settingsMenu: { position: 'absolute', bottom: 85, right: 25, backgroundColor: 'rgba(18,18,18,0.96)', borderRadius: 12, padding: 18, width: 260, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
-  menuHeader: { color: '#FFF', fontSize: 15, fontWeight: 'bold', marginBottom: 12 },
-  menuRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.06)' },
-  menuText: { color: '#DDD', fontSize: 13, fontWeight: '600' },
-  menuValue: { color: BRAND_RED, fontSize: 12, fontWeight: 'bold' },
-  backMenuText: { color: BRAND_RED, fontSize: 13, fontWeight: 'bold' },
+  bottomBarWrapper: { width: '100%', position: 'absolute', bottom: 0, paddingHorizontal: 25, paddingBottom: 15, paddingTop: 35 },
+  progressBarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  timeText: { color: '#DDD', fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  slider: { flex: 1, marginHorizontal: 10, height: 38 },
+  actionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
 
-  subMenuLabel: { color: '#777', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 6 },
-  colorDot: { width: 22, height: 22, borderRadius: 11 },
-  colorDotActive: { borderWidth: 2, borderColor: '#FFF' },
-  stylePill: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 4 },
-  stylePillActive: { borderColor: BRAND_RED, borderWidth: 1 },
-  stylePillText: { color: '#FFF', fontSize: 11, fontWeight: 'bold' },
+  sideDrawerSurface: { position: 'absolute', top: 0, bottom: 0, right: 0, width: 340, backgroundColor: '#0F0F0F', borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 20, paddingVertical: 18, zIndex: 50 },
+  panelHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.08)' },
+  panelHeaderTitle: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+  drawerBackNavRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
+  drawerBackNavText: { color: BRAND_RED, fontSize: 13, fontWeight: '700' },
+  drawerOptionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+  drawerOptionLabel: { color: '#EEE', fontSize: 13, fontWeight: '600' },
+  drawerOptionValue: { color: '#AAA', fontSize: 12, fontWeight: '600' },
+  subRouteIndicator: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  drawerSelectableRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+  activeSelectedText: { color: BRAND_RED, fontWeight: '800' },
 
-  bottomBar: { width: '100%', paddingHorizontal: 25, paddingBottom: 20, paddingTop: 25 },
-  progressBarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  timeText: { color: '#FFF', fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  slider: { flex: 1, marginHorizontal: 10, height: 35 },
-  actionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4 },
-
-  miniSkipBtn: { backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
-  miniSkipText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
+  subStyleSectionLabel: { color: '#777', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginTop: 14, marginBottom: 8 },
+  colorPaletteCluster: { flexDirection: 'row', gap: 12 },
+  colorChip: { width: 26, height: 26, borderRadius: 13 },
+  colorChipActive: { borderWidth: 2, borderColor: '#FFF' },
+  choiceGroupRow: { flexDirection: 'row', gap: 8 },
+  choicePill: { backgroundColor: 'rgba(255,255,255,0.08)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 5 },
+  choicePillActive: { borderWidth: 1, borderColor: BRAND_RED },
+  choicePillText: { color: '#FFF', fontSize: 11, fontWeight: '700' },
 
   errorContainer: { flex: 1, backgroundColor: '#050505', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
   errorTitle: { color: '#FFF', fontSize: 16, fontWeight: 'bold', marginBottom: 4 },
