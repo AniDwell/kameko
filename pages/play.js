@@ -8,8 +8,8 @@ import firestore from '@react-native-firebase/firestore';
 import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
 import ProxyImage from '../components/ProxyImage';
 
-// THIS FIXES THE CRASH: Importing global navigation hook
-import { useNavigation } from '@react-navigation/native';
+// Direct import of Player to prevent navigation dependency failures
+import Player from './play/player';
 
 const { width, height } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
@@ -35,11 +35,7 @@ const IconCheck = ({ size = 24, color = BRAND_RED }) => (<Svg width={size} heigh
 const IconShare = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13" /></Svg>);
 const IconDownload = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" /></Svg>);
 
-export default function Play({ anime, user, onBack }) {
-
-  // INITIALIZING GLOBAL NAVIGATION (Fixes undefined navigate error)
-  const nav = useNavigation();
-
+export default function Play({ anime, user, onBack, navigation }) {
   const currentAnime = anime || {
     id: 'solo-leveling',
     title: 'Solo Leveling',
@@ -64,6 +60,9 @@ export default function Play({ anime, user, onBack }) {
   const [loadingEpisode, setLoadingEpisode] = useState(null);
   const [isUpcoming, setIsUpcoming] = useState(currentAnime.status?.toUpperCase() === 'UPCOMING');
   const [inLibrary, setInLibrary] = useState(false);
+
+  // Fallback player overlay state when navigation prop is undefined
+  const [activePlayback, setActivePlayback] = useState(null);
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
@@ -209,8 +208,7 @@ export default function Play({ anime, user, onBack }) {
       const finalReferer = streamManifest.referer || "https://vidwish.live/";
       const finalSubtitles = streamManifest.subtitles || [];
 
-      // USING GLOBAL NAVIGATION INSTEAD OF PROPS TO PREVENT CRASH
-      nav.navigate('Player', {
+      const playbackPayload = {
         streamUrl: finalStreamUrl,
         referer: finalReferer,
         subtitles: finalSubtitles,
@@ -219,7 +217,14 @@ export default function Play({ anime, user, onBack }) {
         episodeTitle: episodeItem.title,
         animeId: currentAnime.id,
         userUid: user?.uid
-      });
+      };
+
+      // Navigate if stack router exists, otherwise mount local player overlay
+      if (navigation && typeof navigation.navigate === 'function') {
+        navigation.navigate('Player', playbackPayload);
+      } else {
+        setActivePlayback(playbackPayload);
+      }
 
     } catch (e) {
       console.error('STREAM ERROR:', e);
@@ -332,7 +337,7 @@ export default function Play({ anime, user, onBack }) {
           </Defs>
           <Rect width="100%" height="100%" fill="url(#topNavGrad)" />
         </Svg>
-        <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => nav.goBack())}>
+        <TouchableOpacity style={styles.navBackBtn} onPress={onBack || (() => navigation?.goBack?.())}>
           <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5"><Path d="M15 18l-6-6 6-6" /></Svg>
         </TouchableOpacity>
       </View>
@@ -377,7 +382,7 @@ export default function Play({ anime, user, onBack }) {
             );
           } else {
             return (
-              <TouchableOpacity style={styles.altCard} activeOpacity={0.8} onPress={() => { nav.push ? nav.push('Play', { anime: item }) : (onBack && onBack()); }}>
+              <TouchableOpacity style={styles.altCard} activeOpacity={0.8} onPress={() => { navigation?.push ? navigation.push('Play', { anime: item }) : (onBack && onBack()); }}>
                 <ProxyImage source={{ uri: item.coverImage }} style={styles.altThumbnail} resizeMode="cover" />
                 <View style={styles.altMeta}>
                   <View style={styles.altBadge}><Text style={styles.altBadgeText}>{item.relationType}</Text></View>
@@ -393,12 +398,27 @@ export default function Play({ anime, user, onBack }) {
         overScrollMode="never"
         bounces={false}
       />
+
+      {/* FULLSCREEN PLAYER OVERLAY IF DIRECT NAVIGATION WAS UNAVAILABLE */}
+      {activePlayback && (
+        <View style={styles.playerFullscreenContainer}>
+          <Player
+            route={{ params: activePlayback }}
+            navigation={{ goBack: () => setActivePlayback(null) }}
+          />
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#050505' },
+  playerFullscreenContainer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 9999,
+    backgroundColor: '#000000'
+  },
   topNav: { position: 'absolute', top: 0, left: 0, right: 0, height: 110, zIndex: 100, paddingTop: 45, paddingHorizontal: 16 },
   navBackBtn: { padding: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 20, alignSelf: 'flex-start' },
   heroContainer: { width: '100%' },
