@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, Animated, 
   Dimensions, ActivityIndicator, StatusBar, BackHandler,
@@ -8,37 +8,55 @@ import { Video, ResizeMode } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import Slider from '@react-native-community/slider';
 import firestore from '@react-native-firebase/firestore';
-import Svg, { Path, Circle, Rect } from 'react-native-svg';
+import Svg, { Path, Circle, Rect, Defs, LinearGradient, Stop } from 'react-native-svg';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
+const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
-// --- PREMIUM SVG ICONS ---
-const IconPlay = ({ size = 26, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>
-);
-const IconPause = ({ size = 26, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></Svg>
-);
-const IconBackward = ({ size = 24, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" /></Svg>
-);
-const IconForward = ({ size = 24, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" /></Svg>
-);
-const IconSettings = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Circle cx="12" cy="12" r="3"/><Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></Svg>
-);
-const IconSubs = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Rect x="3" y="5" width="18" height="14" rx="2" ry="2"/><Path d="M7 15h3m4 0h3M7 9h10"/></Svg>
-);
-const IconSkip = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M5 4l10 8-10 8V4z"/><Path d="M19 5v14"/></Svg>
-);
-const IconBack = ({ size = 24, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5"><Path d="M19 12H5M12 19l-7-7 7-7"/></Svg>
-);
+// --- IN-MEMORY CACHE ---
+const tmdbCache = {
+  seriesQueries: new Map(),    // normalizedTitle -> { tmdbId, details }
+  seasonMaps: new Map(),       // tmdbId -> [{ seasonNumber, episodeCount, totalPrior }]
+  episodeData: new Map()       // `tmdb_episode_${tmdbId}_${season}_${episode}` -> epMetadata
+};
+
+// --- STRING MATCHING & NORMALIZATION ENGINE ---
+const cleanTitle = (str = '') => {
+  return str
+    .toLowerCase()
+    .replace(/\(dub\)|\(sub\)|\(uncensored\)|season \d+|part \d+/gi, '')
+    .replace(/[^a-z0-9\s]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const calculateSimilarity = (s1, s2) => {
+  const norm1 = cleanTitle(s1);
+  const norm2 = cleanTitle(s2);
+  if (norm1 === norm2) return 1.0;
+  if (!norm1 || !norm2) return 0.0;
+
+  const words1 = new Set(norm1.split(' '));
+  const words2 = new Set(norm2.split(' '));
+  const intersection = new Set([...words1].filter(x => words2.has(x)));
+  const union = new Set([...words1, ...words2]);
+  
+  const jaccard = intersection.size / union.size;
+  const startsWithBonus = norm1.startsWith(norm2) || norm2.startsWith(norm1) ? 0.2 : 0;
+  return Math.min(1.0, jaccard + startsWithBonus);
+};
+
+// --- SVG ICONS ---
+const IconPlay = ({ size = 26, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>);
+const IconPause = ({ size = 26, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></Svg>);
+const IconBackward = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" /></Svg>);
+const IconForward = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" /></Svg>);
+const IconSettings = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Circle cx="12" cy="12" r="3"/><Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></Svg>);
+const IconSubs = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Rect x="3" y="5" width="18" height="14" rx="2" ry="2"/><Path d="M7 15h3m4 0h3M7 9h10"/></Svg>);
+const IconSkip = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M5 4l10 8-10 8V4z"/><Path d="M19 5v14"/></Svg>);
+const IconBack = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5"><Path d="M19 12H5M12 19l-7-7 7-7"/></Svg>);
 
 export default function Player({ route, navigation }) {
   const { 
@@ -52,6 +70,7 @@ export default function Player({ route, navigation }) {
 
   const videoRef = useRef(null);
   const uiOpacity = useRef(new Animated.Value(1)).current;
+  const infoOverlayOpacity = useRef(new Animated.Value(0)).current;
   const skipIntroOpacity = useRef(new Animated.Value(0)).current;
 
   const [status, setStatus] = useState({});
@@ -59,42 +78,41 @@ export default function Player({ route, navigation }) {
   const [showUI, setShowUI] = useState(true);
   const [resizeMode, setResizeMode] = useState(ResizeMode.CONTAIN);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
-  const [showSkipIndicator, setShowSkipIndicator] = useState(null); 
+  const [showSkipIndicator, setShowSkipIndicator] = useState(null);
 
-  // Settings Menus
-  const [activeMenu, setActiveMenu] = useState(null); // 'main', 'quality', 'subs'
+  // Settings & Subs Styling
+  const [activeMenu, setActiveMenu] = useState(null);
   const [subColor, setSubColor] = useState('#FFFFFF');
   const [subSize, setSubSize] = useState(16);
   const [subHeight, setSubHeight] = useState(30);
 
-  // Network & Stream State
+  // Stream Resolution
   const [streamData, setStreamData] = useState(null);
   const [loadingStream, setLoadingStream] = useState(true);
   const [fatalError, setFatalError] = useState(null);
 
-  // Quality State
-  const [selectedQuality, setSelectedQuality] = useState('Auto');
-  const [currentAutoRes, setCurrentAutoRes] = useState('1080p');
+  // TMDB Metadata State
+  const [metaLoading, setMetaLoading] = useState(true);
+  const [tmdbMeta, setTmdbMeta] = useState(null);
 
-  // Gestures (Volume / Brightness)
+  // Gestures
   const [brightnessOverlay, setBrightnessOverlay] = useState(0); 
   const [volume, setVolume] = useState(1.0); 
   const [gestureText, setGestureText] = useState(null);
 
-  // Skip Intro State
+  // Intro Skip & Subtitles
   const [introData, setIntroData] = useState({ start: 0, end: 0 });
   const [showSkipButton, setShowSkipButton] = useState(false);
   const skipTimerRef = useRef(null);
-
-  // Subtitles
   const [parsedSubs, setParsedSubs] = useState([]);
   const [currentSubText, setCurrentSubText] = useState('');
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
 
   const hideUITimeout = useRef(null);
+  const overlayTimerRef = useRef(null);
   const lastTapRef = useRef(0);
 
-  // 1. Force Landscape & Hardware Navigation
+  // --- 1. ORIENTATION & HARDWARE BACK ---
   useEffect(() => {
     async function lockOrientation() {
       try {
@@ -110,6 +128,8 @@ export default function Player({ route, navigation }) {
       StatusBar.setHidden(false);
       backHandler.remove();
       if (skipTimerRef.current) clearTimeout(skipTimerRef.current);
+      if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+      if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
     };
   }, []);
 
@@ -119,7 +139,165 @@ export default function Player({ route, navigation }) {
     return true;
   };
 
-  // 2. Direct Network Resolution Engine
+  // --- 2. NETFLIX OVERLAY FADE LOGIC ---
+  const triggerNetflixOverlay = useCallback(() => {
+    if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+    Animated.timing(infoOverlayOpacity, {
+      toValue: 1,
+      duration: 350,
+      useNativeDriver: true
+    }).start();
+
+    overlayTimerRef.current = setTimeout(() => {
+      Animated.timing(infoOverlayOpacity, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: true
+      }).start();
+    }, 6000);
+  }, [infoOverlayOpacity]);
+
+  // --- 3. TMDB SEARCH, SCORING & SEASON MAPPING ENGINE ---
+  useEffect(() => {
+    let isCancelled = false;
+
+    const fetchAndMapTMDB = async () => {
+      setMetaLoading(true);
+      setTmdbMeta(null); // Prevent stale state leak
+
+      try {
+        const queryNorm = cleanTitle(animeTitle);
+        let seriesDetails = tmdbCache.seriesQueries.get(queryNorm);
+
+        if (!seriesDetails) {
+          const searchUrl = `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(animeTitle)}&include_adult=false`;
+          const sRes = await fetch(searchUrl);
+          const sJson = await sRes.json();
+          const results = sJson?.results || [];
+
+          if (results.length === 0) {
+            setMetaLoading(false);
+            return;
+          }
+
+          // Score results by similarity across English, Original, and Alternative titles
+          let bestMatch = null;
+          let highestScore = -1;
+
+          for (const item of results) {
+            const scoreName = calculateSimilarity(animeTitle, item.name || '');
+            const scoreOrig = calculateSimilarity(animeTitle, item.original_name || '');
+            const candidateScore = Math.max(scoreName, scoreOrig);
+
+            if (candidateScore > highestScore) {
+              highestScore = candidateScore;
+              bestMatch = item;
+            }
+          }
+
+          if (!bestMatch || highestScore < 0.25) {
+            setMetaLoading(false);
+            return;
+          }
+
+          // Fetch full series info with ratings
+          const detailUrl = `https://api.themoviedb.org/3/tv/${bestMatch.id}?api_key=${TMDB_API_KEY}&append_to_response=content_ratings,alternative_titles`;
+          const dRes = await fetch(detailUrl);
+          seriesDetails = await dRes.json();
+          tmdbCache.seriesQueries.set(queryNorm, seriesDetails);
+        }
+
+        if (isCancelled || !seriesDetails?.id) return;
+
+        // Build season distribution map (filtering out Season 0 specials)
+        let seasonDistribution = tmdbCache.seasonMaps.get(seriesDetails.id);
+        if (!seasonDistribution) {
+          const validSeasons = (seriesDetails.seasons || [])
+            .filter(s => s.season_number > 0)
+            .sort((a, b) => a.season_number - b.season_number);
+
+          let totalAcc = 0;
+          seasonDistribution = validSeasons.map(s => {
+            const entry = {
+              seasonNumber: s.season_number,
+              episodeCount: s.episode_count || 0,
+              priorTotal: totalAcc
+            };
+            totalAcc += (s.episode_count || 0);
+            return entry;
+          });
+          tmdbCache.seasonMaps.set(seriesDetails.id, seasonDistribution);
+        }
+
+        // Map global AniList episode number to TMDB { season, episode }
+        const globalEp = parseInt(episodeNum, 10) || 1;
+        let matchedSeason = 1;
+        let matchedEpisode = globalEp;
+        let foundInMap = false;
+
+        for (const s of seasonDistribution) {
+          if (globalEp > s.priorTotal && globalEp <= (s.priorTotal + s.episodeCount)) {
+            matchedSeason = s.seasonNumber;
+            matchedEpisode = globalEp - s.priorTotal;
+            foundInMap = true;
+            break;
+          }
+        }
+
+        // If AniList count overflows TMDB series (e.g. Sequel indexed separately on TMDB)
+        if (!foundInMap && seasonDistribution.length > 0) {
+          const lastSeason = seasonDistribution[seasonDistribution.length - 1];
+          matchedSeason = lastSeason.seasonNumber;
+          matchedEpisode = Math.max(1, globalEp - lastSeason.priorTotal);
+        }
+
+        // Fetch Episode Specific Metadata
+        const epCacheKey = `tmdb_episode_${seriesDetails.id}_${matchedSeason}_${matchedEpisode}`;
+        let episodeInfo = tmdbCache.episodeData.get(epCacheKey);
+
+        if (!episodeInfo) {
+          const epUrl = `https://api.themoviedb.org/3/tv/${seriesDetails.id}/season/${matchedSeason}/episode/${matchedEpisode}?api_key=${TMDB_API_KEY}`;
+          const epRes = await fetch(epUrl);
+          if (epRes.ok) {
+            episodeInfo = await epRes.json();
+            tmdbCache.episodeData.set(epCacheKey, episodeInfo);
+          }
+        }
+
+        if (isCancelled) return;
+
+        // Content Rating calculation
+        const ratings = seriesDetails.content_ratings?.results || [];
+        const inRating = ratings.find(r => r.iso_3166_1 === 'IN')?.rating;
+        const usRating = ratings.find(r => r.iso_3166_1 === 'US')?.rating;
+        const fallbackRating = ratings[0]?.rating || null;
+        const certification = inRating || usRating || fallbackRating;
+
+        // Series Genres
+        const genres = (seriesDetails.genres || []).map(g => g.name).slice(0, 3).join(' • ');
+
+        setTmdbMeta({
+          seasonNumber: matchedSeason,
+          episodeNumber: matchedEpisode,
+          title: episodeInfo?.name || episodeTitle || `Episode ${episodeNum}`,
+          overview: episodeInfo?.overview || seriesDetails.overview || '',
+          stillPath: episodeInfo?.still_path ? `https://image.tmdb.org/t/p/w500${episodeInfo.still_path}` : null,
+          certification,
+          genres
+        });
+        triggerNetflixOverlay();
+      } catch (err) {
+        // Resilient fallback: playback proceeds smoothly on network/API failure
+      } finally {
+        if (!isCancelled) setMetaLoading(false);
+      }
+    };
+
+    fetchAndMapTMDB();
+    return () => { isCancelled = true; };
+  }, [animeTitle, episodeNum, triggerNetflixOverlay]);
+
+  // --- 4. STREAM RESOLUTION ENGINE ---
   useEffect(() => {
     let isMounted = true;
 
@@ -155,10 +333,7 @@ export default function Player({ route, navigation }) {
         return;
       }
 
-      if (finalStreamData.intro) {
-        setIntroData(finalStreamData.intro);
-      }
-
+      if (finalStreamData.intro) setIntroData(finalStreamData.intro);
       setStreamData(finalStreamData);
       setLoadingStream(false);
     };
@@ -167,7 +342,7 @@ export default function Player({ route, navigation }) {
     return () => { isMounted = false; };
   }, [animeId, episodeNum, targetType]);
 
-  // 3. Subtitle Engine
+  // --- 5. VTT SUBTITLE PARSER ---
   useEffect(() => {
     if (!streamData?.subtitles || streamData.subtitles.length === 0) return;
 
@@ -189,21 +364,14 @@ export default function Player({ route, navigation }) {
             if (!ts) return 0;
             const parts = ts.split(':');
             let s = 0;
-            if (parts.length === 3) {
-              s += parseInt(parts[0], 10) * 3600;
-              s += parseInt(parts[1], 10) * 60;
-              s += parseFloat(parts[2].replace(',', '.'));
-            } else if (parts.length === 2) {
-              s += parseInt(parts[0], 10) * 60;
-              s += parseFloat(parts[1].replace(',', '.'));
-            }
+            if (parts.length === 3) s = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2].replace(',', '.'));
+            else s = parseInt(parts[0], 10) * 60 + parseFloat(parts[1].replace(',', '.'));
             return s * 1000;
           };
 
           const textLines = lines.slice(lines.indexOf(timeLine) + 1).filter(l => !l.startsWith('WEBVTT') && l.trim() !== '');
-          const cleanText = textLines.join('\n').replace(/<[^>]+>/g, ''); 
-
-          cues.push({ startMs: parseTime(startStr), endMs: parseTime(endStr), text: cleanText });
+          const clean = textLines.join('\n').replace(/<[^>]+>/g, '');
+          cues.push({ startMs: parseTime(startStr), endMs: parseTime(endStr), text: clean });
         }
         setParsedSubs(cues);
       } catch (_) {}
@@ -212,18 +380,12 @@ export default function Player({ route, navigation }) {
     loadSubtitles();
   }, [streamData]);
 
-  // 4. Playback Tick (Subtitle sync, Auto Skip Intro, Progress)
+  // --- 6. TICK (SUBS, SKIP INTRO, SYNC) ---
   useEffect(() => {
     if (!status.isLoaded) return;
     const currentMs = status.positionMillis || 0;
     const currentSecs = Math.floor(currentMs / 1000);
 
-    // Auto resolution badge detection
-    if (status.naturalSize?.height) {
-      setCurrentAutoRes(`${status.naturalSize.height}p`);
-    }
-
-    // Subtitle sync
     if (subtitlesEnabled && parsedSubs.length > 0) {
       const activeCue = parsedSubs.find(c => currentMs >= c.startMs && currentMs <= c.endMs);
       if (activeCue && activeCue.text !== currentSubText) setCurrentSubText(activeCue.text);
@@ -232,7 +394,6 @@ export default function Player({ route, navigation }) {
       setCurrentSubText('');
     }
 
-    // Skip intro timer logic
     if (introData.end > 0 && currentSecs >= introData.start && currentSecs < introData.end) {
       if (!showSkipButton && !skipTimerRef.current) {
         setShowSkipButton(true);
@@ -244,16 +405,13 @@ export default function Player({ route, navigation }) {
         }, 6000);
       }
     } else if (showSkipButton) {
-      Animated.timing(skipIntroOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
-        setShowSkipButton(false);
-      });
+      Animated.timing(skipIntroOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setShowSkipButton(false));
       if (skipTimerRef.current) {
         clearTimeout(skipTimerRef.current);
         skipTimerRef.current = null;
       }
     }
 
-    // Firestore Progress Sync
     const durationSecs = Math.floor((status.durationMillis || 1) / 1000);
     if (userUid && animeId && status.isPlaying && currentSecs > 0 && currentSecs % 10 === 0) {
       const isCompleted = currentSecs > (durationSecs * 0.85);
@@ -268,7 +426,7 @@ export default function Player({ route, navigation }) {
     }
   }, [status.positionMillis, subtitlesEnabled]);
 
-  // 5. Swipe Gestures (Brightness on Left, Volume on Right)
+  // --- 7. SWIPE GESTURES ---
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 15,
@@ -287,53 +445,50 @@ export default function Player({ route, navigation }) {
           setVolume(prev => {
             let next = prev - (dy * 0.005);
             next = Math.max(0, Math.min(next, 2.0));
-            if (videoRef.current) {
-              videoRef.current.setVolumeAsync(Math.min(next, 1.0));
-            }
+            if (videoRef.current) videoRef.current.setVolumeAsync(Math.min(next, 1.0));
             setGestureText(`Volume ${Math.round(next * 100)}%`);
             return next;
           });
         }
       },
-      onPanResponderRelease: () => {
-        setTimeout(() => setGestureText(null), 1000);
-      }
+      onPanResponderRelease: () => setTimeout(() => setGestureText(null), 1000)
     })
   ).current;
 
-  // 6. UI Auto-Hide Engine
-  const resetHideTimer = () => {
+  // --- 8. UI VISIBILITY ENGINE ---
+  const showControls = () => {
     setShowUI(true);
     Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+    triggerNetflixOverlay();
+    resetHideTimer();
+  };
+
+  const hideControls = () => {
+    if (activeMenu) setActiveMenu(null);
+    Animated.timing(uiOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setShowUI(false));
+  };
+
+  const toggleControls = () => {
+    if (showUI) hideControls();
+    else showControls();
+  };
+
+  const resetHideTimer = () => {
     if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
-    
     hideUITimeout.current = setTimeout(() => {
       if (status.isPlaying && !activeMenu) {
-        Animated.timing(uiOpacity, { toValue: 0, duration: 400, useNativeDriver: true }).start(() => setShowUI(false));
+        hideControls();
       }
     }, 4500);
   };
 
-  useEffect(() => {
-    if (status.isPlaying) resetHideTimer();
-    else {
-      if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
-      setShowUI(true);
-      Animated.timing(uiOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    }
-  }, [status.isPlaying, activeMenu]);
-
-  // Double-tap & Tap Overlay
   const handleTouchOverlay = (evt) => {
-    if (activeMenu) { 
-      setActiveMenu(null); 
-      return; 
-    }
     const now = Date.now();
     const tapDelay = now - lastTapRef.current;
     lastTapRef.current = now;
 
     if (tapDelay < 300) {
+      if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
       const touchX = evt.nativeEvent.locationX;
       if (touchX > Dimensions.get('window').width / 2) {
         seekForward();
@@ -343,7 +498,7 @@ export default function Player({ route, navigation }) {
         triggerSkipIndicator('left');
       }
     } else {
-      resetHideTimer();
+      toggleControls();
     }
   };
 
@@ -352,7 +507,7 @@ export default function Player({ route, navigation }) {
     setTimeout(() => setShowSkipIndicator(null), 600);
   };
 
-  // Playback Operations
+  // --- PLAYBACK DISPATCHERS ---
   const togglePlayPause = () => {
     if (!videoRef.current) return;
     status.isPlaying ? videoRef.current.pauseAsync() : videoRef.current.playAsync();
@@ -409,7 +564,7 @@ export default function Player({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* NATIVE EXPO VIDEO ENGINE */}
+      {/* 1. NATIVE EXPO VIDEO */}
       <Video
         ref={videoRef}
         style={styles.videoPlayer}
@@ -428,13 +583,13 @@ export default function Player({ route, navigation }) {
         shouldPlay
       />
 
-      {/* HARDWARE BRIGHTNESS OVERLAY */}
+      {/* 2. BRIGHTNESS TINT OVERLAY */}
       <View 
         style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${brightnessOverlay})` }]} 
         pointerEvents="none" 
       />
 
-      {/* CUSTOM VTT SUBTITLE DISPLAY */}
+      {/* 3. SUBTITLE RENDERING */}
       {subtitlesEnabled && currentSubText !== '' && (
         <View style={[styles.subtitleContainer, { bottom: subHeight }]} pointerEvents="none">
           <Text style={[styles.subtitleText, { color: subColor, fontSize: subSize }]}>
@@ -443,28 +598,62 @@ export default function Player({ route, navigation }) {
         </View>
       )}
 
-      {/* DYNAMIC WHITE BUFFERING SPINNER */}
+      {/* 4. NETFLIX-STYLE METADATA OVERLAY */}
+      {tmdbMeta && (
+        <Animated.View style={[styles.netflixOverlayWrapper, { opacity: infoOverlayOpacity }]} pointerEvents="none">
+          <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
+            <Defs>
+              <LinearGradient id="infoGrad" x1="0" y1="0" x2="1" y2="1">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
+                <Stop offset="0.6" stopColor="#000000" stopOpacity="0.45" />
+                <Stop offset="1" stopColor="#000000" stopOpacity="0" />
+              </LinearGradient>
+            </Defs>
+            <Rect width="100%" height="100%" fill="url(#infoGrad)" />
+          </Svg>
+          <View style={styles.netflixInfoCard}>
+            <View style={styles.metaRowHeader}>
+              {tmdbMeta.certification && (
+                <View style={styles.certBadge}>
+                  <Text style={styles.certBadgeText}>{tmdbMeta.certification}</Text>
+                </View>
+              )}
+              {tmdbMeta.genres ? <Text style={styles.genreTags}>{tmdbMeta.genres}</Text> : null}
+            </View>
+            <Text style={styles.metaEpisodeHeader} numberOfLines={1}>
+              S{tmdbMeta.seasonNumber} E{tmdbMeta.episodeNumber} — {tmdbMeta.title}
+            </Text>
+            {tmdbMeta.overview ? (
+              <Text style={styles.metaDescription} numberOfLines={3}>
+                {tmdbMeta.overview}
+              </Text>
+            ) : null}
+          </View>
+        </Animated.View>
+      )}
+
+      {/* 5. DYNAMIC WHITE BUFFERING SPINNER */}
       {(!status.isLoaded || status.isBuffering) && (
         <View style={styles.bufferingOverlay} pointerEvents="none">
           <ActivityIndicator size="large" color="#FFFFFF" />
         </View>
       )}
 
-      {/* SWIPE GESTURE TOAST */}
+      {/* 6. GESTURE TOAST NOTIFICATION */}
       {gestureText && (
         <View style={styles.gestureIndicator} pointerEvents="none">
           <Text style={styles.gestureText}>{gestureText}</Text>
         </View>
       )}
 
-      {/* TOUCH & PAN RESPONDER LAYER */}
+      {/* 7. PAN RESPONDER & DOUBLE-TAP TOUCH SENSOR */}
       <View {...panResponder.panHandlers} style={[StyleSheet.absoluteFillObject, { zIndex: 5 }]}>
         <TouchableWithoutFeedback onPress={handleTouchOverlay}>
           <View style={StyleSheet.absoluteFillObject} />
         </TouchableWithoutFeedback>
       </View>
 
-      {/* DOUBLE TAP ANIMATIONS */}
+      {/* 8. SKIP SEEK TOASTS */}
       {showSkipIndicator === 'left' && (
         <View style={styles.skipLeftInd} pointerEvents="none">
           <IconBackward size={32} color="#FFF" />
@@ -478,7 +667,7 @@ export default function Player({ route, navigation }) {
         </View>
       )}
 
-      {/* DYNAMIC SKIP INTRO FLOATING BUTTON */}
+      {/* 9. FLOATING SKIP INTRO BUTTON */}
       {showSkipButton && (
         <Animated.View style={[styles.skipIntroFloat, { opacity: skipIntroOpacity }]}>
           <TouchableOpacity 
@@ -492,20 +681,32 @@ export default function Player({ route, navigation }) {
         </Animated.View>
       )}
 
-      {/* UI OVERLAY LAYER */}
+      {/* 10. GRADIENT CONTROLS OVERLAY */}
       <Animated.View style={[styles.uiLayer, { opacity: uiOpacity }]} pointerEvents={showUI ? 'auto' : 'none'}>
-        {/* TOP BAR */}
+        
+        {/* TOP BAR WITH GRADIENT */}
         <View style={styles.topBar}>
+          <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
+            <Defs>
+              <LinearGradient id="topG" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
+                <Stop offset="1" stopColor="#000000" stopOpacity="0" />
+              </LinearGradient>
+            </Defs>
+            <Rect width="100%" height="100%" fill="url(#topG)" />
+          </Svg>
           <TouchableOpacity onPress={handleClosePlayer} style={styles.backBtn} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
             <IconBack size={24} color="#FFF" />
           </TouchableOpacity>
           <View style={{ flex: 1 }}>
             <Text style={styles.animeTitle} numberOfLines={1}>{animeTitle}</Text>
-            <Text style={styles.episodeTitle}>Episode {episodeNum} {episodeTitle ? `• ${episodeTitle}` : ''}</Text>
+            <Text style={styles.episodeTitle}>
+              {tmdbMeta ? `Season ${tmdbMeta.seasonNumber} • Episode ${tmdbMeta.episodeNumber}` : `Episode ${episodeNum}`}
+            </Text>
           </View>
         </View>
 
-        {/* CENTER CONTROLS */}
+        {/* CENTER PLAY/PAUSE */}
         <View style={styles.centerControls} pointerEvents="box-none">
           <TouchableOpacity onPress={seekBackward} style={styles.skipCircleBtn} activeOpacity={0.7}>
             <IconBackward size={28} color="#FFF" />
@@ -524,13 +725,6 @@ export default function Player({ route, navigation }) {
         {activeMenu === 'main' && (
           <View style={styles.settingsMenu}>
             <Text style={styles.menuHeader}>Settings</Text>
-            <TouchableOpacity style={styles.menuRow} onPress={() => setActiveMenu('quality')}>
-              <Text style={styles.menuText}>Quality</Text>
-              <Text style={styles.menuValue}>
-                {selectedQuality === 'Auto' ? `Auto (${currentAutoRes})` : selectedQuality} ›
-              </Text>
-            </TouchableOpacity>
-
             <TouchableOpacity style={styles.menuRow} onPress={() => setActiveMenu('subs')}>
               <Text style={styles.menuText}>Subtitles Style</Text>
               <Text style={styles.menuValue}>Customize ›</Text>
@@ -549,29 +743,6 @@ export default function Player({ route, navigation }) {
               <Text style={styles.menuText}>Aspect Ratio</Text>
               <Text style={styles.menuValue}>{resizeMode === ResizeMode.CONTAIN ? 'Fit' : 'Fill'}</Text>
             </TouchableOpacity>
-          </View>
-        )}
-
-        {activeMenu === 'quality' && (
-          <View style={styles.settingsMenu}>
-            <TouchableOpacity onPress={() => setActiveMenu('main')} style={{ marginBottom: 12 }}>
-              <Text style={styles.backMenuText}>‹ Back</Text>
-            </TouchableOpacity>
-            <Text style={styles.menuHeader}>Video Quality</Text>
-            
-            <TouchableOpacity style={styles.menuRow} onPress={() => { setSelectedQuality('Auto'); setActiveMenu(null); }}>
-              <Text style={[styles.menuText, selectedQuality === 'Auto' && { color: BRAND_RED, fontWeight: 'bold' }]}>
-                Auto ({currentAutoRes})
-              </Text>
-              {selectedQuality === 'Auto' && <Text style={{ color: BRAND_RED }}>✓</Text>}
-            </TouchableOpacity>
-
-            {['1080p', '720p', '480p', '360p'].map((q) => (
-              <TouchableOpacity key={q} style={styles.menuRow} onPress={() => { setSelectedQuality(q); setActiveMenu(null); }}>
-                <Text style={[styles.menuText, selectedQuality === q && { color: BRAND_RED, fontWeight: 'bold' }]}>{q}</Text>
-                {selectedQuality === q && <Text style={{ color: BRAND_RED }}>✓</Text>}
-              </TouchableOpacity>
-            ))}
           </View>
         )}
 
@@ -613,8 +784,18 @@ export default function Player({ route, navigation }) {
           </View>
         )}
 
-        {/* BOTTOM BAR */}
+        {/* BOTTOM CONTROLS WITH GRADIENT */}
         <View style={styles.bottomBar}>
+          <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
+            <Defs>
+              <LinearGradient id="botG" x1="0" y1="1" x2="0" y2="0">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
+                <Stop offset="1" stopColor="#000000" stopOpacity="0" />
+              </LinearGradient>
+            </Defs>
+            <Rect width="100%" height="100%" fill="url(#botG)" />
+          </Svg>
+
           <View style={styles.progressBarRow}>
             <Text style={styles.timeText}>{formatTime(status.positionMillis || 0)}</Text>
             <Slider
@@ -648,7 +829,7 @@ export default function Player({ route, navigation }) {
                 </TouchableOpacity>
               )}
 
-              <TouchableOpacity onPress={() => {/* Next Ep Hook */}}>
+              <TouchableOpacity onPress={() => {/* Next episode navigation hook */}}>
                 <IconSkip size={20} color="#FFF" />
               </TouchableOpacity>
 
@@ -658,6 +839,7 @@ export default function Player({ route, navigation }) {
             </View>
           </View>
         </View>
+
       </Animated.View>
     </View>
   );
@@ -677,14 +859,34 @@ const styles = StyleSheet.create({
   subtitleContainer: { position: 'absolute', width: '100%', alignItems: 'center', zIndex: 9, paddingHorizontal: 30 },
   subtitleText: { fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
 
-  uiLayer: { ...StyleSheet.absoluteFillObject, zIndex: 10, justifyContent: 'space-between', backgroundColor: 'rgba(0,0,0,0.2)' },
-  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 25, paddingTop: 25, paddingBottom: 15, width: '100%', backgroundColor: 'rgba(0,0,0,0.65)' },
+  // Netflix Information Overlay
+  netflixOverlayWrapper: {
+    position: 'absolute',
+    top: 75,
+    left: 25,
+    width: SCREEN_WIDTH * 0.45,
+    borderRadius: 8,
+    overflow: 'hidden',
+    padding: 14,
+    zIndex: 8
+  },
+  netflixInfoCard: { zIndex: 2 },
+  metaRowHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  certBadge: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
+  certBadgeText: { color: '#FFF', fontSize: 9, fontWeight: 'bold' },
+  genreTags: { color: '#CCC', fontSize: 10, fontWeight: '600' },
+  metaEpisodeHeader: { color: '#FFF', fontSize: 14, fontWeight: 'bold', marginVertical: 4 },
+  metaDescription: { color: '#BBB', fontSize: 10, lineHeight: 14 },
+
+  // Controls Layer
+  uiLayer: { ...StyleSheet.absoluteFillObject, zIndex: 10, justifyContent: 'space-between' },
+  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 25, paddingTop: 20, paddingBottom: 25, width: '100%' },
   backBtn: { marginRight: 18 },
   animeTitle: { color: '#FFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.3 },
   episodeTitle: { color: '#AAA', fontSize: 11, fontWeight: '600', marginTop: 2 },
 
   centerControls: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 40 },
-  playPauseBtn: { width: 68, height: 68, borderRadius: 34, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)' },
+  playPauseBtn: { width: 68, height: 68, borderRadius: 34, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)' },
   skipCircleBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
 
   skipLeftInd: { position: 'absolute', left: '16%', top: '44%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 18, borderRadius: 45 },
@@ -709,7 +911,7 @@ const styles = StyleSheet.create({
   stylePillActive: { borderColor: BRAND_RED, borderWidth: 1 },
   stylePillText: { color: '#FFF', fontSize: 11, fontWeight: 'bold' },
 
-  bottomBar: { width: '100%', paddingHorizontal: 25, paddingBottom: 20, paddingTop: 15, backgroundColor: 'rgba(0,0,0,0.75)' },
+  bottomBar: { width: '100%', paddingHorizontal: 25, paddingBottom: 20, paddingTop: 25 },
   progressBarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   timeText: { color: '#FFF', fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] },
   slider: { flex: 1, marginHorizontal: 10, height: 35 },
