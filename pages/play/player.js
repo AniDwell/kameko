@@ -1,9 +1,24 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { 
+  useState, 
+  useEffect, 
+  useRef, 
+  useMemo, 
+  useCallback 
+} from 'react';
 import { 
-  View, Text, StyleSheet, TouchableOpacity, Animated, 
-  ActivityIndicator, StatusBar, BackHandler,
-  TouchableWithoutFeedback, PanResponder, useWindowDimensions,
-  ScrollView, Platform
+  View, 
+  Text, 
+  StyleSheet, 
+  TouchableOpacity, 
+  Animated, 
+  Dimensions, 
+  ActivityIndicator, 
+  StatusBar, 
+  BackHandler,
+  TouchableWithoutFeedback, 
+  PanResponder,
+  ScrollView,
+  useWindowDimensions
 } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -11,20 +26,19 @@ import Slider from '@react-native-community/slider';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Path, Circle, Rect, Defs, LinearGradient, Stop } from 'react-native-svg';
 
-// --- CONFIGURATION CONSTANTS ---
+// --- CONSTANTS & CONFIGURATION ---
 const BRAND_RED = '#E50914';
-const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
-const AUTO_HIDE_DELAY = 4500;
-const FALLBACK_OUTRO_SECONDS = 45;
+const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
+const DEFAULT_OUTRO_DURATION_SEC = 45;
 
-// --- IN-MEMORY CACHE ---
-const memoryCache = {
+// --- IN-MEMORY GLOBAL CACHE ---
+const tmdbCache = {
   seriesQueries: new Map(),
   seasonMaps: new Map(),
-  episodeData: new Map(),
-  parsedSubtitles: new Map()
+  episodeData: new Map()
 };
+const subtitleCache = new Map();
 
 // --- STRING MATCHING HELPERS ---
 const cleanTitle = (str = '') => {
@@ -48,91 +62,86 @@ const calculateSimilarity = (s1, s2) => {
   const union = new Set([...words1, ...words2]);
   
   const jaccard = intersection.size / union.size;
-  const prefixBonus = norm1.startsWith(norm2) || norm2.startsWith(norm1) ? 0.2 : 0;
-  return Math.min(1.0, jaccard + prefixBonus);
+  const startsWithBonus = norm1.startsWith(norm2) || norm2.startsWith(norm1) ? 0.2 : 0;
+  return Math.min(1.0, jaccard + startsWithBonus);
 };
 
-// --- PREMIUM SVG ICONS ---
-const IconPlay = ({ size = 28, color = "#FFF" }) => (
+// --- TIMESTAMP UTILITIES ---
+const parseVttTimestamp = (ts = '') => {
+  if (!ts) return 0;
+  const clean = ts.trim().replace(',', '.');
+  const parts = clean.split(':');
+  let seconds = 0;
+  if (parts.length === 3) {
+    seconds = parseFloat(parts[0]) * 3600 + parseFloat(parts[1]) * 60 + parseFloat(parts[2]);
+  } else if (parts.length === 2) {
+    seconds = parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
+  }
+  return Math.round(seconds * 1000);
+};
+
+const formatTime = (millis) => {
+  if (isNaN(millis) || millis < 0) return "00:00";
+  const totalSecs = Math.floor(millis / 1000);
+  const h = Math.floor(totalSecs / 3600);
+  const m = Math.floor((totalSecs % 3600) / 60).toString().padStart(2, '0');
+  const s = (totalSecs % 60).toString().padStart(2, '0');
+  return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
+};
+
+// --- HIGH-PERFORMANCE SVG ICONS ---
+const IconPlay = ({ size = 32, color = "#FFF" }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
     <Path d="M8 5v14l11-7z" />
   </Svg>
 );
-const IconPause = ({ size = 28, color = "#FFF" }) => (
+const IconPause = ({ size = 32, color = "#FFF" }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
     <Path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
   </Svg>
 );
-const IconReplay10 = ({ size = 24, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-    <Path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8zm-1.5 6.5h-1V15h1v-3.5zm3.5 0h-2v3.5h2V11.5zm0 1v1.5h-1v-1.5h1z" />
+const IconReplay10 = ({ size = 28, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+    <Path d="M12 4V1L8 5l4 4V6a6 6 0 11-6 6H4a8 8 0 108-8z" />
   </Svg>
 );
-const IconForward10 = ({ size = 24, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-    <Path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8zm-1.5 6.5h-1V15h1v-3.5zm3.5 0h-2v3.5h2V11.5zm0 1v1.5h-1v-1.5h1z" />
+const IconForward10 = ({ size = 28, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+    <Path d="M12 4V1l4 4-4 4V6a6 6 0 106 6h2a8 8 0 11-8-8z" />
   </Svg>
 );
 const IconSettings = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Circle cx="12" cy="12" r="3"/>
-    <Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+    <Circle cx="12" cy="12" r="3" />
+    <Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
   </Svg>
 );
-const IconSubtitles = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Rect x="2" y="4" width="20" height="16" rx="2" ry="2"/>
-    <Path d="M7 15h4M15 15h2M7 11h2M13 11h4"/>
+const IconSubs = ({ size = 22, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+    <Rect x="3" y="5" width="18" height="14" rx="2" ry="2" />
+    <Path d="M7 15h3m4 0h3M7 9h10" />
   </Svg>
 );
-const IconNextEp = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M5 4l10 8-10 8V4zM19 5v14"/>
+const IconSkipNext = ({ size = 22, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+    <Path d="M5 4l10 8-10 8V4z" />
+    <Path d="M19 5v14" />
   </Svg>
 );
-const IconBackArrow = ({ size = 24, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M19 12H5M12 19l-7-7 7-7"/>
+const IconBack = ({ size = 24, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5">
+    <Path d="M19 12H5M12 19l-7-7 7-7" />
   </Svg>
 );
 const IconCheck = ({ size = 16, color = BRAND_RED }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-    <Path d="M20 6L9 17l-5-5"/>
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="3">
+    <Path d="M20 6L9 17l-5-5" />
   </Svg>
 );
 
-// --- REUSABLE COMPONENT: ANIMATED PRESS SCALE BUTTON ---
-const PressableScale = ({ children, onPress, style, scaleTo = 0.92, disabled = false }) => {
-  const scale = useRef(new Animated.Value(1)).current;
-
-  const handlePressIn = () => {
-    Animated.spring(scale, { toValue: scaleTo, useNativeDriver: true, speed: 50, bounciness: 0 }).start();
-  };
-
-  const handlePressOut = () => {
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 50, bounciness: 4 }).start();
-  };
-
-  return (
-    <TouchableWithoutFeedback 
-      onPress={onPress} 
-      onPressIn={handlePressIn} 
-      onPressOut={handlePressOut}
-      disabled={disabled}
-    >
-      <Animated.View style={[style, { transform: [{ scale }] }]}>
-        {children}
-      </Animated.View>
-    </TouchableWithoutFeedback>
-  );
-};
-
-// =========================================================================
-// MAIN PLAYER COMPONENT
-// =========================================================================
 export default function Player({ route, navigation }) {
   const { 
-    animeTitle = 'Unknown Anime', 
+    animeTitle = 'Unknown', 
     episodeNum = 1, 
     episodeTitle = '', 
     animeId = null,
@@ -141,125 +150,180 @@ export default function Player({ route, navigation }) {
   } = route?.params || {};
 
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const isLandscape = windowWidth > windowHeight;
-  const panelWidth = Math.min(windowWidth * 0.72, 400);
+  const responsivePanelWidth = useMemo(() => Math.min(windowWidth * 0.78, 380), [windowWidth]);
 
-  // References
   const videoRef = useRef(null);
-  const statusRef = useRef({});
-  const lastTapRef = useRef(0);
-  const tapTimeoutRef = useRef(null);
-  const hideControlsTimer = useRef(null);
-  const overlayTimerRef = useRef(null);
-  const introTimerRef = useRef(null);
 
-  // Core Playback State
+  // --- ANIMATED CONTROLLERS ---
+  const uiOpacity = useRef(new Animated.Value(1)).current;
+  const infoOverlayOpacity = useRef(new Animated.Value(0)).current;
+  const skipIntroAnim = useRef(new Animated.Value(0)).current;
+  const skipOutroAnim = useRef(new Animated.Value(0)).current;
+  const nextCardAnim = useRef(new Animated.Value(0)).current;
+  const panelTranslateX = useRef(new Animated.Value(450)).current;
+  const panelBackdropOpacity = useRef(new Animated.Value(0)).current;
+  const doubleTapLeftAnim = useRef(new Animated.Value(0)).current;
+  const doubleTapRightAnim = useRef(new Animated.Value(0)).current;
+
+  // --- PLAYBACK STATES ---
   const [status, setStatus] = useState({});
   const [isReady, setIsReady] = useState(false);
   const [showUI, setShowUI] = useState(true);
-  const [isScrubbing, setIsScrubbing] = useState(false);
-  const [scrubPosition, setScrubPosition] = useState(0);
-  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [resizeMode, setResizeMode] = useState(ResizeMode.CONTAIN);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const [isBufferingDebounced, setIsBufferingDebounced] = useState(false);
 
-  // Animation Values
-  const uiOpacity = useRef(new Animated.Value(1)).current;
-  const metaOverlayOpacity = useRef(new Animated.Value(0)).current;
-  const drawerAnim = useRef(new Animated.Value(panelWidth)).current;
-  const skipButtonAnim = useRef(new Animated.Value(0)).current;
-  const nextCardAnim = useRef(new Animated.Value(0)).current;
-  const seekIndicatorAnim = useRef(new Animated.Value(0)).current;
-
-  // Drawer / Side Panel Navigation State
-  // Values: null | 'main' | 'quality' | 'audio' | 'subtitles' | 'subtitle_style'
-  const [activeDrawer, setActiveDrawer] = useState(null);
-
-  // Subtitle Styling State
-  const [subColor, setSubColor] = useState('#FFFFFF');
-  const [subSize, setSubSize] = useState(16);
-  const [subElevation, setSubElevation] = useState(30);
-  const [subBgOpacity, setSubBgOpacity] = useState(0.45);
-
-  // Networking, Stream & Server Fallback
+  // --- STREAM & SERVER RESOLUTION ---
   const [streamData, setStreamData] = useState(null);
   const [loadingStream, setLoadingStream] = useState(true);
   const [fatalError, setFatalError] = useState(null);
-  const [availableServers, setAvailableServers] = useState([]);
-  const [currentServerIndex, setCurrentServerIndex] = useState(0);
+  const [activeServerName, setActiveServerName] = useState('hd-1');
 
-  // Multi-Track Subtitles & Parser
-  const [subtitleTracks, setSubtitleTracks] = useState([]);
-  const [selectedSubTrackIndex, setSelectedSubTrackIndex] = useState(-1);
-  const [parsedCues, setParsedCues] = useState([]);
-  const [currentSubtitleText, setCurrentSubtitleText] = useState('');
-
-  // Seeking & Gesture Feedback
-  const [seekDelta, setSeekDelta] = useState(0);
-  const [seekDirection, setSeekDirection] = useState(null);
-  const [brightnessLevel, setBrightnessLevel] = useState(0); // 0 (bright) to 0.85 (dark)
-  const [volumeLevel, setVolumeLevel] = useState(1.0); // 0.0 to 2.0 (boosted)
-  const [toastMessage, setToastMessage] = useState(null);
-
-  // TMDB Metadata
-  const [tmdbMeta, setTmdbMeta] = useState(null);
-
-  // Intro / Outro & Next Episode
+  // --- SEASONS & EPISODE TRANSITION STATES ---
+  const [hasNextEp, setHasNextEp] = useState(false);
+  const [nextEpData, setNextEpData] = useState(null);
   const [introRegion, setIntroRegion] = useState({ start: 0, end: 0 });
   const [outroRegion, setOutroRegion] = useState({ start: 0, end: 0 });
-  const [inIntro, setInIntro] = useState(false);
-  const [inOutro, setInOutro] = useState(false);
-  const [hasNextEpisode, setHasNextEpisode] = useState(false);
-  const [nextEpisodeDismissed, setNextEpisodeDismissed] = useState(false);
+  const [showSkipIntro, setShowSkipIntro] = useState(false);
+  const [showSkipOutro, setShowSkipOutro] = useState(false);
+  const [showNextCard, setShowNextCard] = useState(false);
+  const [isNextCardDismissed, setIsNextCardDismissed] = useState(false);
+
+  // --- TMDB METADATA ---
+  const [tmdbMeta, setTmdbMeta] = useState(null);
+
+  // --- SIDE PANELS (NETFLIX ARCHITECTURE) ---
+  // Active Panel: null | 'main' | 'quality' | 'audio' | 'subtitles' | 'subtitle_styling'
+  const [activePanel, setActivePanel] = useState(null);
+
+  // --- SUBTITLE ENGINE STATE ---
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
+  const [availableSubTracks, setAvailableSubTracks] = useState([]);
+  const [selectedSubTrackUrl, setSelectedSubTrackUrl] = useState(null);
+  const [parsedCues, setParsedCues] = useState([]);
+  const [currentActiveSub, setCurrentActiveSub] = useState('');
+  const [subStyle, setSubStyle] = useState({
+    color: '#FFFFFF',
+    size: 16,
+    bgOpacity: 0.45,
+    elevation: 35
+  });
+
+  // --- DOUBLE TAP & TIMELINE SCRUBBING ---
+  const [accumulatedSeek, setAccumulatedSeek] = useState({ direction: null, seconds: 0 });
+  const [isDraggingSlider, setIsDraggingSlider] = useState(false);
+  const [sliderPreviewMillis, setSliderPreviewMillis] = useState(0);
+
+  // --- SWIPE GESTURES ---
+  const [brightnessLevel, setBrightnessLevel] = useState(0); // 0 (clear) to 0.85 (dimmed)
+  const [volumeLevel, setVolumeLevel] = useState(1.0); // 0.0 to 2.0
+  const [gestureNotice, setGestureNotice] = useState(null);
+
+  // --- TIMERS & REFERENCES ---
+  const hideControlsTimer = useRef(null);
+  const metadataTimer = useRef(null);
+  const doubleTapResetTimer = useRef(null);
+  const gestureNoticeTimer = useRef(null);
+  const lastTapTimestamp = useRef(0);
+  const lastActiveCueIndex = useRef(-1);
 
   // =========================================================================
-  // 1. ISOLATED NEXT EPISODE NAVIGATION HANDLER
+  // 1. ISOLATED NEXT EPISODE NAVIGATION HOOK
   // =========================================================================
   const handleNextEpisode = useCallback(() => {
     const nextEpNum = parseInt(episodeNum, 10) + 1;
-    // Replace with your app's explicit navigation route if different from 'Player'
-    if (navigation && typeof navigation.replace === 'function') {
+    
+    // Smooth reset of current playback state
+    if (videoRef.current) {
+      videoRef.current.pauseAsync().catch(() => {});
+    }
+
+    // Standard Stack Replacement / Push for Seamless Episode Changing
+    if (navigation?.replace) {
       navigation.replace('Player', {
-        animeTitle,
+        animeId: animeId,
+        animeTitle: animeTitle,
         episodeNum: nextEpNum,
-        episodeTitle: `Episode ${nextEpNum}`,
-        animeId,
-        userUid,
-        targetType
+        episodeTitle: nextEpData?.title || `Episode ${nextEpNum}`,
+        userUid: userUid,
+        targetType: targetType
       });
-    } else if (navigation && typeof navigation.navigate === 'function') {
+    } else if (navigation?.navigate) {
       navigation.navigate('Player', {
-        animeTitle,
+        animeId: animeId,
+        animeTitle: animeTitle,
         episodeNum: nextEpNum,
-        episodeTitle: `Episode ${nextEpNum}`,
-        animeId,
-        userUid,
-        targetType
+        episodeTitle: nextEpData?.title || `Episode ${nextEpNum}`,
+        userUid: userUid,
+        targetType: targetType
       });
     }
-  }, [navigation, animeTitle, episodeNum, animeId, userUid, targetType]);
+  }, [navigation, episodeNum, animeId, animeTitle, nextEpData, userUid, targetType]);
 
   // =========================================================================
-  // 2. LIFECYCLE & ORIENTATION LOCK
+  // 2. ORIENTATION & HARDWARE BACK QUEUE
   // =========================================================================
+  const closeSidePanel = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(panelTranslateX, {
+        toValue: 450,
+        duration: 250,
+        useNativeDriver: true
+      }),
+      Animated.timing(panelBackdropOpacity, {
+        toValue: 0,
+        duration: 250,
+        useNativeDriver: true
+      })
+    ]).start(() => {
+      setActivePanel(null);
+      resetControlsTimeout();
+    });
+  }, [panelTranslateX, panelBackdropOpacity]);
+
+  const openSidePanel = useCallback((panelName) => {
+    setActivePanel(panelName);
+    if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
+
+    Animated.parallel([
+      Animated.timing(panelTranslateX, {
+        toValue: 0,
+        duration: 280,
+        useNativeDriver: true
+      }),
+      Animated.timing(panelBackdropOpacity, {
+        toValue: 1,
+        duration: 280,
+        useNativeDriver: true
+      })
+    ]).start();
+  }, [panelTranslateX, panelBackdropOpacity]);
+
   useEffect(() => {
-    async function lockToLandscape() {
+    async function lockScreen() {
       try {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
       } catch (_) {}
-      StatusBar.setHidden(true, 'fade');
+      StatusBar.setHidden(true);
     }
-    lockToLandscape();
+    lockScreen();
 
     const handleHardwareBack = () => {
-      if (activeDrawer !== null) {
-        if (activeDrawer !== 'main') {
-          setActiveDrawer('main');
+      if (activePanel) {
+        if (activePanel !== 'main') {
+          setActivePanel('main');
         } else {
-          closeDrawer();
+          closeSidePanel();
         }
         return true;
       }
-      handleExitPlayer();
+      if (showUI) {
+        hideControlsImmediate();
+        return true;
+      }
+      ScreenOrientation.unlockAsync().catch(() => {});
+      StatusBar.setHidden(false);
+      navigation.goBack();
       return true;
     };
 
@@ -267,662 +331,656 @@ export default function Player({ route, navigation }) {
 
     return () => {
       ScreenOrientation.unlockAsync().catch(() => {});
-      StatusBar.setHidden(false, 'fade');
+      StatusBar.setHidden(false);
       backSubscription.remove();
       if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
-      if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
-      if (introTimerRef.current) clearTimeout(introTimerRef.current);
-      if (tapTimeoutRef.current) clearTimeout(tapTimeoutRef.current);
+      if (metadataTimer.current) clearTimeout(metadataTimer.current);
+      if (doubleTapResetTimer.current) clearTimeout(doubleTapResetTimer.current);
+      if (gestureNoticeTimer.current) clearTimeout(gestureNoticeTimer.current);
     };
-  }, [activeDrawer]);
-
-  const handleExitPlayer = async () => {
-    await ScreenOrientation.unlockAsync().catch(() => {});
-    navigation.goBack();
-  };
+  }, [activePanel, showUI, navigation, closeSidePanel]);
 
   // =========================================================================
-  // 3. TMDB METADATA & SEASON-EPISODE MAPPING
+  // 3. TMDB SEARCH, NORMALIZED SCORING & ANILIST-TO-SEASON MAPPING
   // =========================================================================
+  const showMetadataOverlay = useCallback(() => {
+    if (metadataTimer.current) clearTimeout(metadataTimer.current);
+    Animated.timing(infoOverlayOpacity, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true
+    }).start();
+
+    metadataTimer.current = setTimeout(() => {
+      Animated.timing(infoOverlayOpacity, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: true
+      }).start();
+    }, 6000);
+  }, [infoOverlayOpacity]);
+
   useEffect(() => {
-    let isCancelled = false;
+    let isDisposed = false;
 
     const resolveTMDBMetadata = async () => {
-      setTmdbMeta(null);
-
       try {
-        const queryClean = cleanTitle(animeTitle);
-        let seriesDetails = memoryCache.seriesQueries.get(queryClean);
+        const queryNorm = cleanTitle(animeTitle);
+        let seriesInfo = tmdbCache.seriesQueries.get(queryNorm);
 
-        if (!seriesDetails) {
+        if (!seriesInfo) {
           const searchEndpoint = `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(animeTitle)}&include_adult=false`;
-          const res = await fetch(searchEndpoint);
-          const data = await res.json();
-          const results = data?.results || [];
+          const sRes = await fetch(searchEndpoint);
+          const sJson = await sRes.json();
+          const results = sJson?.results || [];
 
           if (results.length === 0) return;
 
-          let bestMatch = null;
+          let bestEntry = null;
           let highestScore = -1;
 
           for (const item of results) {
-            const scoreName = calculateSimilarity(animeTitle, item.name || '');
-            const scoreOrig = calculateSimilarity(animeTitle, item.original_name || '');
-            const candidateScore = Math.max(scoreName, scoreOrig);
-
-            if (candidateScore > highestScore) {
-              highestScore = candidateScore;
-              bestMatch = item;
+            const scorePrimary = calculateSimilarity(animeTitle, item.name || '');
+            const scoreOriginal = calculateSimilarity(animeTitle, item.original_name || '');
+            const combined = Math.max(scorePrimary, scoreOriginal);
+            if (combined > highestScore) {
+              highestScore = combined;
+              bestEntry = item;
             }
           }
 
-          if (!bestMatch || highestScore < 0.22) return;
+          if (!bestEntry || highestScore < 0.25) return;
 
-          const detailsUrl = `https://api.themoviedb.org/3/tv/${bestMatch.id}?api_key=${TMDB_API_KEY}&append_to_response=content_ratings,alternative_titles`;
-          const dRes = await fetch(detailsUrl);
-          seriesDetails = await dRes.json();
-          memoryCache.seriesQueries.set(queryClean, seriesDetails);
+          const detailEndpoint = `https://api.themoviedb.org/3/tv/${bestEntry.id}?api_key=${TMDB_API_KEY}&append_to_response=content_ratings,alternative_titles`;
+          const dRes = await fetch(detailEndpoint);
+          seriesInfo = await dRes.json();
+          tmdbCache.seriesQueries.set(queryNorm, seriesInfo);
         }
 
-        if (isCancelled || !seriesDetails?.id) return;
+        if (isDisposed || !seriesInfo?.id) return;
 
-        // Cumulative season breakdown
-        let seasonsMap = memoryCache.seasonMaps.get(seriesDetails.id);
-        if (!seasonsMap) {
-          const canonicalSeasons = (seriesDetails.seasons || [])
+        // Compile normalized season distribution map
+        let seasonDistribution = tmdbCache.seasonMaps.get(seriesInfo.id);
+        if (!seasonDistribution) {
+          const validSeasons = (seriesInfo.seasons || [])
             .filter(s => s.season_number > 0)
             .sort((a, b) => a.season_number - b.season_number);
 
-          let accumulatedCount = 0;
-          seasonsMap = canonicalSeasons.map(s => {
-            const record = {
+          let totalAccumulated = 0;
+          seasonDistribution = validSeasons.map(s => {
+            const entry = {
               seasonNumber: s.season_number,
               episodeCount: s.episode_count || 0,
-              priorTotal: accumulatedCount
+              priorTotal: totalAccumulated
             };
-            accumulatedCount += (s.episode_count || 0);
-            return record;
+            totalAccumulated += (s.episode_count || 0);
+            return entry;
           });
-          memoryCache.seasonMaps.set(seriesDetails.id, seasonsMap);
+          tmdbCache.seasonMaps.set(seriesInfo.id, seasonDistribution);
         }
 
-        const globalEp = parseInt(episodeNum, 10) || 1;
-        let matchedSeason = 1;
-        let matchedEpisode = globalEp;
-        let mappingSuccess = false;
+        const targetGlobalEp = parseInt(episodeNum, 10) || 1;
+        let mappedSeason = 1;
+        let mappedEpisode = targetGlobalEp;
+        let mapFound = false;
 
-        for (const s of seasonsMap) {
-          if (globalEp > s.priorTotal && globalEp <= (s.priorTotal + s.episodeCount)) {
-            matchedSeason = s.seasonNumber;
-            matchedEpisode = globalEp - s.priorTotal;
-            mappingSuccess = true;
+        for (const s of seasonDistribution) {
+          if (targetGlobalEp > s.priorTotal && targetGlobalEp <= (s.priorTotal + s.episodeCount)) {
+            mappedSeason = s.seasonNumber;
+            mappedEpisode = targetGlobalEp - s.priorTotal;
+            mapFound = true;
             break;
           }
         }
 
-        if (!mappingSuccess && seasonsMap.length > 0) {
-          const finalS = seasonsMap[seasonsMap.length - 1];
-          matchedSeason = finalS.seasonNumber;
-          matchedEpisode = Math.max(1, globalEp - finalS.priorTotal);
+        // Handle continuation franchises where TMDB separates sequel seasons into discrete shows
+        if (!mapFound && seasonDistribution.length > 0) {
+          const lastEntry = seasonDistribution[seasonDistribution.length - 1];
+          mappedSeason = lastEntry.seasonNumber;
+          mappedEpisode = Math.max(1, targetGlobalEp - lastEntry.priorTotal);
         }
 
-        // Check if next episode exists in TMDB
-        const totalIndexedEps = seasonsMap.reduce((acc, curr) => acc + curr.episodeCount, 0);
-        if (globalEp < totalIndexedEps) {
-          setHasNextEpisode(true);
-        }
+        // Fetch episode-level metadata
+        const epKey = `tmdb_episode_${seriesInfo.id}_${mappedSeason}_${mappedEpisode}`;
+        let epMetadata = tmdbCache.episodeData.get(epKey);
 
-        // Fetch episode specific entry
-        const epCacheKey = `tmdb_episode_${seriesDetails.id}_${matchedSeason}_${matchedEpisode}`;
-        let epInfo = memoryCache.episodeData.get(epCacheKey);
-
-        if (!epInfo) {
-          const epUrl = `https://api.themoviedb.org/3/tv/${seriesDetails.id}/season/${matchedSeason}/episode/${matchedEpisode}?api_key=${TMDB_API_KEY}`;
+        if (!epMetadata) {
+          const epUrl = `https://api.themoviedb.org/3/tv/${seriesInfo.id}/season/${mappedSeason}/episode/${mappedEpisode}?api_key=${TMDB_API_KEY}`;
           const epRes = await fetch(epUrl);
           if (epRes.ok) {
-            epInfo = await epRes.json();
-            memoryCache.episodeData.set(epCacheKey, epInfo);
+            epMetadata = await epRes.json();
+            tmdbCache.episodeData.set(epKey, epMetadata);
           }
         }
 
-        if (isCancelled) return;
+        if (isDisposed) return;
 
-        const ratings = seriesDetails.content_ratings?.results || [];
-        const cert = ratings.find(r => r.iso_3166_1 === 'IN')?.rating ||
-                     ratings.find(r => r.iso_3166_1 === 'US')?.rating ||
-                     ratings[0]?.rating || null;
+        // Content certification extraction
+        const ratings = seriesInfo.content_ratings?.results || [];
+        const inCert = ratings.find(r => r.iso_3166_1 === 'IN')?.rating;
+        const usCert = ratings.find(r => r.iso_3166_1 === 'US')?.rating;
+        const fallbackCert = ratings[0]?.rating || null;
+        const finalCert = inCert || usCert || fallbackCert;
 
-        const genres = (seriesDetails.genres || []).map(g => g.name).slice(0, 3).join(' • ');
+        const genresLabel = (seriesInfo.genres || []).map(g => g.name).slice(0, 3).join(' • ');
 
         setTmdbMeta({
-          seasonNumber: matchedSeason,
-          episodeNumber: matchedEpisode,
-          title: epInfo?.name || episodeTitle || `Episode ${episodeNum}`,
-          overview: epInfo?.overview || seriesDetails.overview || '',
-          certification: cert,
-          genres
+          season: mappedSeason,
+          episode: mappedEpisode,
+          title: epMetadata?.name || episodeTitle || `Episode ${targetGlobalEp}`,
+          overview: epMetadata?.overview || seriesInfo.overview || '',
+          stillPath: epMetadata?.still_path ? `https://image.tmdb.org/t/p/w500${epMetadata.still_path}` : null,
+          certification: finalCert,
+          genres: genresLabel
         });
-
-        triggerNetflixMetadataBanner();
-      } catch (_) {
-        // Non-blocking catch
-      }
+        showMetadataOverlay();
+      } catch (_) {}
     };
 
     resolveTMDBMetadata();
-    return () => { isCancelled = true; };
-  }, [animeTitle, episodeNum]);
+    return () => { isDisposed = true; };
+  }, [animeTitle, episodeNum, episodeTitle, showMetadataOverlay]);
 
   // =========================================================================
-  // 4. STREAM RESOLUTION & RECOVERY ENGINE
+  // 4. STREAM RESOLUTION & EPISODE VERIFICATION
   // =========================================================================
-  const resolveCurrentStream = useCallback(async (serverList, startIndex = 0) => {
-    setLoadingStream(true);
-    setFatalError(null);
-
-    let chosenData = null;
-    let activeIdx = startIndex;
-
-    for (let i = startIndex; i < serverList.length; i++) {
-      const srv = serverList[i];
-      try {
-        const url = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}&server=${srv}&type=${targetType}`;
-        const res = await fetch(url);
-        const json = await res.json();
-        if (json?.success && json?.data?.m3u8) {
-          chosenData = json.data;
-          activeIdx = i;
-          break;
-        }
-      } catch (_) {}
-    }
-
-    if (!chosenData) {
-      setFatalError('Unable to connect to streaming servers. Please verify connection or try again.');
-      setLoadingStream(false);
-      return;
-    }
-
-    // Set intro/outro
-    if (chosenData.intro) {
-      setIntroRegion({ start: chosenData.intro.start || 0, end: chosenData.intro.end || 0 });
-    }
-    if (chosenData.outro) {
-      setOutroRegion({ start: chosenData.outro.start || 0, end: chosenData.outro.end || 0 });
-    }
-
-    // Initialize subtitles list
-    const subs = chosenData.subtitles || [];
-    setSubtitleTracks(subs);
-    if (subs.length > 0) {
-      const defaultIdx = subs.findIndex(s => s.default) !== -1 ? subs.findIndex(s => s.default) : 0;
-      setSelectedSubTrackIndex(defaultIdx);
-    } else {
-      setSelectedSubTrackIndex(-1);
-    }
-
-    setCurrentServerIndex(activeIdx);
-    setStreamData(chosenData);
-    setLoadingStream(false);
-  }, [animeId, episodeNum, targetType]);
-
   useEffect(() => {
-    let isMounted = true;
+    let isDisposed = false;
 
-    const bootstrapStream = async () => {
+    const initStreamPipeline = async () => {
+      setLoadingStream(true);
+      setFatalError(null);
+
+      // Verify availability of the next episode
+      try {
+        const epListRes = await fetch(`${VERCEL_API_BASE}/api/episodes/${encodeURIComponent(animeId)}`);
+        const epListJson = await epListRes.json();
+        const eps = epListJson?.data || epListJson?.episodes || [];
+        const nextTarget = parseInt(episodeNum, 10) + 1;
+        const found = eps.find(e => parseInt(e.num || e.episode_no || e.number, 10) === nextTarget);
+        if (found) {
+          setHasNextEp(true);
+          setNextEpData(found);
+        } else {
+          setHasNextEp(false);
+          setNextEpData(null);
+        }
+      } catch (_) {
+        setHasNextEp(false);
+      }
+
+      // Discover and resolve optimal stream server
       let candidateServers = ['hd-1', 'hd-2', 'vidstream-2'];
       try {
         const srvRes = await fetch(`${VERCEL_API_BASE}/api/servers?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}`);
         const srvJson = await srvRes.json();
-        if (srvJson?.success && Array.isArray(srvJson.data)) {
+        if (srvJson?.success && Array.isArray(srvJson?.data)) {
           const filtered = srvJson.data.filter(s => s.type === targetType).map(s => s.serverName);
           if (filtered.length > 0) candidateServers = filtered;
         }
       } catch (_) {}
 
-      if (isMounted) {
-        setAvailableServers(candidateServers);
-        resolveCurrentStream(candidateServers, 0);
+      let resolvedPayload = null;
+      let connectedServer = candidateServers[0];
+
+      for (const srv of candidateServers) {
+        try {
+          const endpoint = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}&server=${srv}&type=${targetType}`;
+          const res = await fetch(endpoint);
+          const json = await res.json();
+          if (json?.success && json?.data?.m3u8) {
+            resolvedPayload = json.data;
+            connectedServer = srv;
+            break;
+          }
+        } catch (_) {}
       }
+
+      if (isDisposed) return;
+
+      if (!resolvedPayload) {
+        setFatalError(`Unable to play episode ${episodeNum}. All streaming servers are currently unresponsive.`);
+        setLoadingStream(false);
+        return;
+      }
+
+      // Setup Outro/Intro bounds
+      if (resolvedPayload.intro) {
+        setIntroRegion({ start: resolvedPayload.intro.start || 0, end: resolvedPayload.intro.end || 0 });
+      }
+      if (resolvedPayload.outro) {
+        setOutroRegion({ start: resolvedPayload.outro.start || 0, end: resolvedPayload.outro.end || 0 });
+      }
+
+      // Subtitle Track Pipeline
+      if (Array.isArray(resolvedPayload.subtitles) && resolvedPayload.subtitles.length > 0) {
+        setAvailableSubTracks(resolvedPayload.subtitles);
+        const def = resolvedPayload.subtitles.find(s => s.default) || resolvedPayload.subtitles[0];
+        setSelectedSubTrackUrl(def.file);
+      } else {
+        setAvailableSubTracks([]);
+        setSelectedSubTrackUrl(null);
+      }
+
+      setActiveServerName(connectedServer);
+      setStreamData(resolvedPayload);
+      setLoadingStream(false);
     };
 
-    bootstrapStream();
-    return () => { isMounted = false; };
-  }, [animeId, episodeNum, targetType, resolveCurrentStream]);
+    initStreamPipeline();
+    return () => { isDisposed = true; };
+  }, [animeId, episodeNum, targetType]);
 
   // =========================================================================
-  // 5. WEBVTT SUBTITLE ENGINE (BINARY SEARCH LOOKUP)
+  // 5. HIGH-PERFORMANCE VTT SUBTITLE PARSER & CACHE
   // =========================================================================
   useEffect(() => {
-    if (selectedSubTrackIndex < 0 || !subtitleTracks[selectedSubTrackIndex]) {
+    if (!selectedSubTrackUrl) {
       setParsedCues([]);
-      setCurrentSubtitleText('');
+      setCurrentActiveSub('');
       return;
     }
 
-    const track = subtitleTracks[selectedSubTrackIndex];
-    const fileUrl = track.file;
-    if (!fileUrl) return;
+    let isDisposed = false;
 
-    if (memoryCache.parsedSubtitles.has(fileUrl)) {
-      setParsedCues(memoryCache.parsedSubtitles.get(fileUrl));
-      return;
-    }
+    const loadAndParseVtt = async () => {
+      setCurrentActiveSub('');
+      lastActiveCueIndex.current = -1;
 
-    let isAborted = false;
+      if (subtitleCache.has(selectedSubTrackUrl)) {
+        setParsedCues(subtitleCache.get(selectedSubTrackUrl));
+        return;
+      }
 
-    const fetchAndParseVTT = async () => {
       try {
-        const res = await fetch(fileUrl);
-        if (!res.ok) return;
-        const rawText = await res.text();
-        if (isAborted) return;
+        const response = await fetch(selectedSubTrackUrl);
+        if (!response.ok) return;
+        const vttData = await response.text();
 
         const cues = [];
-        const blocks = rawText.split(/\r?\n\r?\n/);
+        const rawBlocks = vttData.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n\n');
 
-        const parseTimestamp = (ts) => {
-          if (!ts) return 0;
-          const cleanTs = ts.trim().replace(',', '.');
-          const parts = cleanTs.split(':');
-          let s = 0;
-          if (parts.length === 3) {
-            s = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2]);
-          } else if (parts.length === 2) {
-            s = parseInt(parts[0], 10) * 60 + parseFloat(parts[1]);
-          }
-          return Math.round(s * 1000);
-        };
-
-        for (const block of blocks) {
-          const lines = block.split(/\r?\n/);
+        for (const block of rawBlocks) {
+          const lines = block.trim().split('\n');
           const timeIndex = lines.findIndex(l => l.includes('-->'));
           if (timeIndex === -1) continue;
 
-          const [startRaw, endRaw] = lines[timeIndex].split('-->');
-          if (!startRaw || !endRaw) continue;
+          const timeLine = lines[timeIndex];
+          const [startRaw, endRawAndOpts] = timeLine.split('-->');
+          if (!startRaw || !endRawAndOpts) continue;
 
-          const startMs = parseTimestamp(startRaw);
-          const endMs = parseTimestamp(endRaw.trim().split(' ')[0]);
+          const startMs = parseVttTimestamp(startRaw);
+          const endMs = parseVttTimestamp(endRawAndOpts.trim().split(' ')[0]);
 
-          const textPayload = lines.slice(timeIndex + 1)
-            .filter(l => !l.startsWith('WEBVTT') && !l.startsWith('NOTE') && l.trim() !== '')
+          const textLines = lines.slice(timeIndex + 1);
+          const cleanText = textLines
             .join('\n')
             .replace(/<[^>]+>/g, '')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
             .trim();
 
-          if (textPayload) {
-            cues.push({ startMs, endMs, text: textPayload });
+          if (cleanText && endMs > startMs) {
+            cues.push({ startMs, endMs, text: cleanText });
           }
         }
 
-        // Sort monotonically by startMs
         cues.sort((a, b) => a.startMs - b.startMs);
-        memoryCache.parsedSubtitles.set(fileUrl, cues);
-        if (!isAborted) setParsedCues(cues);
+        subtitleCache.set(selectedSubTrackUrl, cues);
+
+        if (!isDisposed) {
+          setParsedCues(cues);
+        }
       } catch (_) {}
     };
 
-    fetchAndParseVTT();
-    return () => { isAborted = true; };
-  }, [selectedSubTrackIndex, subtitleTracks]);
-
-  // Binary search lookup for high-frequency subtitle syncing
-  const getActiveSubtitleAtTime = useCallback((currMs) => {
-    if (!parsedCues || parsedCues.length === 0) return '';
-
-    let low = 0;
-    let high = parsedCues.length - 1;
-    let index = -1;
-
-    while (low <= high) {
-      const mid = (low + high) >> 1;
-      if (parsedCues[mid].startMs <= currMs) {
-        index = mid;
-        low = mid + 1;
-      } else {
-        high = mid - 1;
-      }
-    }
-
-    if (index === -1) return '';
-
-    // Search back up to 25 seconds for overlapping/long-duration cues
-    const activeTexts = [];
-    const minLookback = currMs - 25000;
-
-    for (let i = index; i >= 0; i--) {
-      const cue = parsedCues[i];
-      if (cue.startMs < minLookback) break;
-      if (currMs >= cue.startMs && currMs <= cue.endMs) {
-        activeTexts.unshift(cue.text);
-      }
-    }
-
-    return activeTexts.join('\n');
-  }, [parsedCues]);
+    loadAndParseVtt();
+    return () => { isDisposed = true; };
+  }, [selectedSubTrackUrl]);
 
   // =========================================================================
-  // 6. ANIMATION & OVERLAY DRIVERS
+  // 6. EXACT PLAYBACK LOOP (TIMELINE, CUE MATCHING, TIMEOUTS)
   // =========================================================================
-  const triggerNetflixMetadataBanner = useCallback(() => {
-    if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
-    Animated.timing(metaOverlayOpacity, {
-      toValue: 1,
-      duration: 350,
-      useNativeDriver: true
-    }).start();
-
-    overlayTimerRef.current = setTimeout(() => {
-      Animated.timing(metaOverlayOpacity, {
-        toValue: 0,
-        duration: 600,
-        useNativeDriver: true
-      }).start();
-    }, 5500);
-  }, [metaOverlayOpacity]);
-
-  const openDrawer = (panelType) => {
-    setActiveDrawer(panelType);
-    Animated.spring(drawerAnim, {
-      toValue: 0,
-      useNativeDriver: true,
-      bounciness: 0,
-      speed: 18
-    }).start();
-  };
-
-  const closeDrawer = () => {
-    Animated.timing(drawerAnim, {
-      toValue: panelWidth,
-      duration: 250,
-      useNativeDriver: true
-    }).start(() => setActiveDrawer(null));
-  };
-
-  const showControls = useCallback(() => {
-    setShowUI(true);
-    Animated.timing(uiOpacity, {
-      toValue: 1,
-      duration: 220,
-      useNativeDriver: true
-    }).start();
-    resetHideTimer();
-  }, [uiOpacity]);
-
-  const hideControls = useCallback(() => {
-    if (activeDrawer !== null || isScrubbing) return;
-    Animated.timing(uiOpacity, {
-      toValue: 0,
-      duration: 350,
-      useNativeDriver: true
-    }).start(() => setShowUI(false));
-  }, [uiOpacity, activeDrawer, isScrubbing]);
-
-  const toggleControls = useCallback(() => {
-    if (showUI) hideControls();
-    else showControls();
-  }, [showUI, hideControls, showControls]);
-
-  const resetHideTimer = useCallback(() => {
-    if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
-    hideControlsTimer.current = setTimeout(() => {
-      if (statusRef.current?.isPlaying && activeDrawer === null && !isScrubbing) {
-        hideControls();
-      }
-    }, AUTO_HIDE_DELAY);
-  }, [activeDrawer, isScrubbing, hideControls]);
-
-  // =========================================================================
-  // 7. PLAYBACK STATUS & TICK ENGINE
-  // =========================================================================
-  const onPlaybackStatusUpdate = (playbackStatus) => {
-    statusRef.current = playbackStatus;
+  const onPlaybackStatusUpdate = useCallback((playbackStatus) => {
     setStatus(playbackStatus);
 
     if (playbackStatus.isLoaded) {
       if (!isReady) setIsReady(true);
 
-      const posMs = playbackStatus.positionMillis || 0;
-      const durMs = playbackStatus.durationMillis || 1;
-      const currSec = Math.floor(posMs / 1000);
-      const durSec = Math.floor(durMs / 1000);
-
-      // Subtitle Sync
-      if (selectedSubTrackIndex >= 0) {
-        const text = getActiveSubtitleAtTime(posMs);
-        if (text !== currentSubtitleText) {
-          setCurrentSubtitleText(text);
-        }
+      // Debounce buffering spinner to prevent flicker
+      if (playbackStatus.isBuffering && !isBufferingDebounced) {
+        setIsBufferingDebounced(true);
+      } else if (!playbackStatus.isBuffering && isBufferingDebounced) {
+        setIsBufferingDebounced(false);
       }
 
-      // Intro Region Trigger
-      if (introRegion.end > 0 && currSec >= introRegion.start && currSec < introRegion.end) {
-        if (!inIntro) {
-          setInIntro(true);
-          Animated.spring(skipButtonAnim, { toValue: 1, useNativeDriver: true }).start();
-        }
-      } else if (inIntro) {
-        setInIntro(false);
-        Animated.timing(skipButtonAnim, { toValue: 0, duration: 300, useNativeDriver: true }).start();
-      }
+      const currentMs = playbackStatus.positionMillis || 0;
+      const durationMs = playbackStatus.durationMillis || 1;
+      const currentSec = Math.floor(currentMs / 1000);
+      const durationSec = Math.floor(durationMs / 1000);
 
-      // Outro Region Trigger
-      const computedOutroStart = outroRegion.start > 0 ? outroRegion.start : (durSec > 90 ? durSec - FALLBACK_OUTRO_SECONDS : -1);
-      if (computedOutroStart > 0 && currSec >= computedOutroStart) {
-        if (!inOutro) {
-          setInOutro(true);
-          if (hasNextEpisode && !nextEpisodeDismissed) {
-            Animated.spring(nextCardAnim, { toValue: 1, useNativeDriver: true }).start();
+      // --- BINARY SEARCH SUBTITLE MATCHER ---
+      if (subtitlesEnabled && parsedCues.length > 0) {
+        let low = 0;
+        let high = parsedCues.length - 1;
+        let matchedIndex = -1;
+
+        while (low <= high) {
+          const mid = (low + high) >> 1;
+          const cue = parsedCues[mid];
+          if (currentMs >= cue.startMs && currentMs <= cue.endMs) {
+            matchedIndex = mid;
+            break;
+          } else if (currentMs < cue.startMs) {
+            high = mid - 1;
+          } else {
+            low = mid + 1;
           }
         }
-      } else if (inOutro) {
-        setInOutro(false);
+
+        if (matchedIndex !== -1) {
+          if (lastActiveCueIndex.current !== matchedIndex) {
+            lastActiveCueIndex.current = matchedIndex;
+            setCurrentActiveSub(parsedCues[matchedIndex].text);
+          }
+        } else if (currentActiveSub !== '') {
+          lastActiveCueIndex.current = -1;
+          setCurrentActiveSub('');
+        }
+      } else if (currentActiveSub !== '') {
+        setCurrentActiveSub('');
       }
 
-      // Firestore Watched Progress Sync
-      if (userUid && animeId && playbackStatus.isPlaying && currSec > 0 && currSec % 10 === 0) {
-        const finished = currSec > durSec * 0.88;
+      // --- SKIP INTRO REGION CHECK ---
+      if (introRegion.end > 0 && currentSec >= introRegion.start && currentSec < introRegion.end) {
+        if (!showSkipIntro) {
+          setShowSkipIntro(true);
+          Animated.timing(skipIntroAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+        }
+      } else if (showSkipIntro) {
+        setShowSkipIntro(false);
+        Animated.timing(skipIntroAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start();
+      }
+
+      // --- OUTRO & NEXT EPISODE CARD LOGIC ---
+      const effectiveOutroStart = outroRegion.start > 0 ? outroRegion.start : Math.max(0, durationSec - DEFAULT_OUTRO_DURATION_SEC);
+      if (durationSec > 60 && currentSec >= effectiveOutroStart) {
+        if (!showSkipOutro) {
+          setShowSkipOutro(true);
+          Animated.timing(skipOutroAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+        }
+        if (hasNextEp && !showNextCard && !isNextCardDismissed) {
+          setShowNextCard(true);
+          Animated.timing(nextCardAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+        }
+      } else {
+        if (showSkipOutro) {
+          setShowSkipOutro(false);
+          Animated.timing(skipOutroAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start();
+        }
+        if (showNextCard) {
+          setShowNextCard(false);
+          Animated.timing(nextCardAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start();
+        }
+      }
+
+      // --- FIRESTORE PROGRESS (THROTTLED TO EVERY 10 SECONDS) ---
+      if (userUid && animeId && playbackStatus.isPlaying && currentSec > 0 && currentSec % 10 === 0) {
+        const isFinished = currentSec > (durationSec * 0.85);
         firestore().collection('users').doc(userUid).collection('progress').doc(String(animeId)).set({
           animeId: String(animeId),
           lastWatchedEp: episodeNum,
-          progress: currSec,
-          duration: durSec,
-          finishedEp: finished,
+          progress: currentSec,
+          duration: durationSec,
+          finishedEp: isFinished,
           timestamp: Date.now()
         }, { merge: true }).catch(() => {});
       }
     }
-  };
+  }, [
+    isReady,
+    isBufferingDebounced,
+    subtitlesEnabled,
+    parsedCues,
+    currentActiveSub,
+    introRegion,
+    outroRegion,
+    showSkipIntro,
+    showSkipOutro,
+    hasNextEp,
+    showNextCard,
+    isNextCardDismissed,
+    userUid,
+    animeId,
+    episodeNum,
+    skipIntroAnim,
+    skipOutroAnim,
+    nextCardAnim
+  ]);
 
   // =========================================================================
-  // 8. DOUBLE-TAP SEEK ACCUMULATION
+  // 7. CONTROLS AUTO-HIDE & FADE ENGINE
   // =========================================================================
-  const handleSeekDelta = (deltaSec) => {
-    if (!videoRef.current || !statusRef.current?.isLoaded) return;
+  const resetControlsTimeout = useCallback(() => {
+    if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
+    if (!status.isPlaying || activePanel || isDraggingSlider) return;
 
-    const currentPosition = statusRef.current.positionMillis || 0;
-    const duration = statusRef.current.durationMillis || 0;
-    const target = Math.max(0, Math.min(duration, currentPosition + (deltaSec * 1000)));
+    hideControlsTimer.current = setTimeout(() => {
+      hideControlsImmediate();
+    }, 4500);
+  }, [status.isPlaying, activePanel, isDraggingSlider]);
 
-    videoRef.current.setPositionAsync(target);
-    resetHideTimer();
-  };
+  const showControlsAnimated = useCallback(() => {
+    setShowUI(true);
+    Animated.timing(uiOpacity, {
+      toValue: 1,
+      duration: 250,
+      useNativeDriver: true
+    }).start();
+    resetControlsTimeout();
+  }, [uiOpacity, resetControlsTimeout]);
 
-  const handleDoubleTap = (side) => {
-    const isForward = side === 'right';
-    const increment = isForward ? 10 : -10;
+  const hideControlsImmediate = useCallback(() => {
+    if (activePanel) return;
+    Animated.timing(uiOpacity, {
+      toValue: 0,
+      duration: 350,
+      useNativeDriver: true
+    }).start(() => setShowUI(false));
+  }, [activePanel, uiOpacity]);
 
-    setSeekDirection(isForward ? 'forward' : 'backward');
-    setSeekDelta(prev => (prev === 0 || (isForward && prev < 0) || (!isForward && prev > 0)) ? increment : prev + increment);
+  const toggleControls = useCallback(() => {
+    if (activePanel) {
+      closeSidePanel();
+      return;
+    }
+    if (showUI) {
+      hideControlsImmediate();
+    } else {
+      showControlsAnimated();
+    }
+  }, [activePanel, showUI, closeSidePanel, hideControlsImmediate, showControlsAnimated]);
 
+  useEffect(() => {
+    if (!status.isPlaying) {
+      if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
+      setShowUI(true);
+      Animated.timing(uiOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    } else {
+      resetControlsTimeout();
+    }
+  }, [status.isPlaying, resetControlsTimeout, uiOpacity]);
+
+  // =========================================================================
+  // 8. ACCUMULATIVE DOUBLE TAP SEEKING ENGINE
+  // =========================================================================
+  const executeSeekDelta = useCallback((deltaSec) => {
+    if (!videoRef.current || !status.isLoaded) return;
+    const currentMs = status.positionMillis || 0;
+    const durationMs = status.durationMillis || 1;
+    const targetMs = Math.max(0, Math.min(durationMs, currentMs + deltaSec * 1000));
+    videoRef.current.setPositionAsync(targetMs);
+  }, [status.isLoaded, status.positionMillis, status.durationMillis]);
+
+  const handleSeekDoubleTap = useCallback((direction) => {
+    const isRight = direction === 'right';
+    const delta = isRight ? 10 : -10;
+
+    setAccumulatedSeek(prev => {
+      const nextSec = prev.direction === direction ? prev.seconds + 10 : 10;
+      return { direction, seconds: nextSec };
+    });
+
+    executeSeekDelta(delta);
+
+    const animTarget = isRight ? doubleTapRightAnim : doubleTapLeftAnim;
+    animTarget.setValue(0);
     Animated.sequence([
-      Animated.timing(seekIndicatorAnim, { toValue: 1, duration: 150, useNativeDriver: true }),
-      Animated.delay(650),
-      Animated.timing(seekIndicatorAnim, { toValue: 0, duration: 250, useNativeDriver: true })
-    ]).start(() => setSeekDelta(0));
+      Animated.spring(animTarget, { toValue: 1, friction: 5, useNativeDriver: true }),
+      Animated.timing(animTarget, { toValue: 0, duration: 250, useNativeDriver: true })
+    ]).start();
 
-    handleSeekDelta(increment);
-  };
+    if (doubleTapResetTimer.current) clearTimeout(doubleTapResetTimer.current);
+    doubleTapResetTimer.current = setTimeout(() => {
+      setAccumulatedSeek({ direction: null, seconds: 0 });
+    }, 700);
+  }, [executeSeekDelta, doubleTapRightAnim, doubleTapLeftAnim]);
+
+  const onOverlayTap = useCallback((evt) => {
+    const now = Date.now();
+    const tapInterval = now - lastTapTimestamp.current;
+    lastTapTimestamp.current = now;
+
+    if (tapInterval < 300) {
+      const touchX = evt.nativeEvent.locationX;
+      if (touchX > windowWidth / 2) {
+        handleSeekDoubleTap('right');
+      } else {
+        handleSeekDoubleTap('left');
+      }
+    } else {
+      toggleControls();
+    }
+  }, [windowWidth, handleSeekDoubleTap, toggleControls]);
 
   // =========================================================================
-  // 9. DUAL-ZONE SWIPE GESTURES (BRIGHTNESS / VOLUME)
+  // 9. SWIPE GESTURES (LEFT = BRIGHTNESS, RIGHT = VOLUME)
   // =========================================================================
   const panResponder = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 18 && Math.abs(g.dx) < 22,
-    onPanResponderMove: (_, g) => {
-      const isLeft = g.moveX < windowWidth / 2;
-      if (isLeft) {
-        // Brightness dimming
+    onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 15,
+    onPanResponderMove: (_, gestureState) => {
+      const { moveX, dy } = gestureState;
+      const isLeftSide = moveX < windowWidth / 2;
+
+      if (gestureNoticeTimer.current) clearTimeout(gestureNoticeTimer.current);
+
+      if (isLeftSide) {
         setBrightnessLevel(prev => {
-          const next = Math.max(0, Math.min(0.85, prev + (g.dy * 0.0035)));
-          setToastMessage(`Brightness: ${Math.round((1 - next) * 100)}%`);
-          return next;
+          let updated = prev + (dy * 0.002);
+          updated = Math.max(0, Math.min(updated, 0.85));
+          setGestureNotice(`Brightness: ${Math.round((1 - updated) * 100)}%`);
+          return updated;
         });
       } else {
-        // Volume adjustment (0% to 200%)
         setVolumeLevel(prev => {
-          const next = Math.max(0, Math.min(2.0, prev - (g.dy * 0.005)));
+          let updated = prev - (dy * 0.004);
+          updated = Math.max(0, Math.min(updated, 2.0));
           if (videoRef.current) {
-            videoRef.current.setVolumeAsync(Math.min(next, 1.0));
+            videoRef.current.setVolumeAsync(Math.min(updated, 1.0)).catch(() => {});
           }
-          setToastMessage(`Volume: ${Math.round(next * 100)}%`);
-          return next;
+          setGestureNotice(`Volume: ${Math.round(updated * 100)}%`);
+          return updated;
         });
       }
     },
     onPanResponderRelease: () => {
-      setTimeout(() => setToastMessage(null), 1200);
+      gestureNoticeTimer.current = setTimeout(() => setGestureNotice(null), 1000);
     }
   }), [windowWidth]);
 
-  // Handle single and double tap delegation
-  const handleTouchZone = (evt) => {
-    if (activeDrawer !== null) {
-      closeDrawer();
-      return;
-    }
-
-    const now = Date.now();
-    const touchX = evt.nativeEvent.locationX;
-    const isDoubleTap = now - lastTapRef.current < 280;
-    lastTapRef.current = now;
-
-    if (isDoubleTap) {
-      if (tapTimeoutRef.current) clearTimeout(tapTimeoutRef.current);
-      if (touchX < windowWidth * 0.35) {
-        handleDoubleTap('left');
-      } else if (touchX > windowWidth * 0.65) {
-        handleDoubleTap('right');
-      } else {
-        toggleControls();
-      }
-    } else {
-      tapTimeoutRef.current = setTimeout(() => {
-        toggleControls();
-      }, 290);
-    }
-  };
+  // =========================================================================
+  // 10. RESPONSIVE SUBTITLE ELEVATION CALCULATION
+  // =========================================================================
+  const calculatedSubtitleBottom = useMemo(() => {
+    let base = subStyle.elevation;
+    if (showUI) base += 75;
+    if (showSkipIntro || showSkipOutro || showNextCard) base += 45;
+    return base;
+  }, [subStyle.elevation, showUI, showSkipIntro, showSkipOutro, showNextCard]);
 
   // =========================================================================
-  // 10. SEEK TIMELINE & BUTTON HANDLERS
+  // 11. PLAYBACK DISPATCHERS
   // =========================================================================
-  const togglePlayPause = () => {
+  const togglePlayPause = useCallback(() => {
     if (!videoRef.current) return;
     if (status.isPlaying) {
-      videoRef.current.pauseAsync();
+      videoRef.current.pauseAsync().catch(() => {});
     } else {
-      videoRef.current.playAsync();
+      videoRef.current.playAsync().catch(() => {});
     }
-    resetHideTimer();
-  };
+    resetControlsTimeout();
+  }, [status.isPlaying, resetControlsTimeout]);
 
-  const handleSlidingStart = () => {
-    setIsScrubbing(true);
+  const onSliderValueChange = useCallback((val) => {
+    setIsDraggingSlider(true);
+    setSliderPreviewMillis(val);
     if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
-  };
+  }, []);
 
-  const handleSliderValueChange = (val) => {
-    setScrubPosition(val);
-  };
-
-  const handleSlidingComplete = async (val) => {
+  const onSliderSlidingComplete = useCallback(async (val) => {
+    setIsDraggingSlider(false);
     if (videoRef.current) {
       await videoRef.current.setPositionAsync(val);
     }
-    setIsScrubbing(false);
-    resetHideTimer();
-  };
-
-  const formatTimestamp = (millis) => {
-    if (!millis || isNaN(millis)) return "00:00";
-    const totalSecs = Math.floor(millis / 1000);
-    const hrs = Math.floor(totalSecs / 3600);
-    const mins = Math.floor((totalSecs % 3600) / 60);
-    const secs = totalSecs % 60;
-    if (hrs > 0) {
-      return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    }
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+    resetControlsTimeout();
+  }, [resetControlsTimeout]);
 
   // =========================================================================
-  // 11. SUBTITLE VERTICAL OFFSET CALCULATION
-  // =========================================================================
-  const computedSubtitleBottom = useMemo(() => {
-    let offset = subElevation;
-    if (showUI) offset += 72; // Move up to avoid bottom timeline
-    if (inIntro || (inOutro && hasNextEpisode && !nextEpisodeDismissed)) offset += 45; // Move up to avoid cards
-    return offset;
-  }, [subElevation, showUI, inIntro, inOutro, hasNextEpisode, nextEpisodeDismissed]);
-
-  // =========================================================================
-  // 12. RENDER: LOADERS & FATAL ERRORS
+  // 12. RENDER PIPELINE
   // =========================================================================
   if (loadingStream) {
     return (
-      <View style={styles.blackBackgroundCenter}>
+      <View style={styles.cinematicLoadingContainer}>
         <ActivityIndicator size="large" color="#FFFFFF" />
-        <Text style={styles.loadingStreamText}>Connecting to secure stream...</Text>
+        <Text style={styles.cinematicLoadingText}>Loading Episode {episodeNum}...</Text>
       </View>
     );
   }
 
   if (fatalError || !streamData) {
     return (
-      <View style={styles.blackBackgroundCenter}>
-        <Text style={styles.errorHeader}>Unable to play this episode</Text>
-        <Text style={styles.errorSub}>{fatalError || "A network or server issue prevented playback."}</Text>
-        <View style={styles.errorButtonsRow}>
-          <PressableScale 
-            style={styles.errorActionButton} 
-            onPress={() => resolveCurrentStream(availableServers, (currentServerIndex + 1) % availableServers.length)}
+      <View style={styles.errorSurfaceContainer}>
+        <Text style={styles.errorPrimaryText}>Unable to play this episode</Text>
+        <Text style={styles.errorSecondaryText}>{fatalError || "Connection error."}</Text>
+        <View style={styles.errorActionsRow}>
+          <TouchableOpacity 
+            style={styles.errorPillBtn} 
+            onPress={() => {
+              setLoadingStream(true);
+              setStreamData(null);
+            }}
           >
-            <Text style={styles.errorActionText}>Change Server</Text>
-          </PressableScale>
-          <PressableScale 
-            style={[styles.errorActionButton, { backgroundColor: BRAND_RED }]} 
-            onPress={() => resolveCurrentStream(availableServers, currentServerIndex)}
+            <Text style={styles.errorPillBtnText}>Retry</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.errorPillBtn, { backgroundColor: '#333' }]} 
+            onPress={handleClosePlayer}
           >
-            <Text style={styles.errorActionText}>Retry</Text>
-          </PressableScale>
-          <PressableScale style={styles.errorActionButton} onPress={handleExitPlayer}>
-            <Text style={styles.errorActionText}>Go Back</Text>
-          </PressableScale>
+            <Text style={styles.errorPillBtnText}>Go Back</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  // =========================================================================
-  // 13. MAIN PLAYER INTERFACE
-  // =========================================================================
   return (
-    <View style={styles.rootContainer}>
-      {/* NATIVE EXPO-AV VIDEO ENGINE */}
+    <View style={styles.rootPlayerContainer}>
+      {/* NATIVE EXPO AV VIDEO ENGINE */}
       <Video
         ref={videoRef}
-        style={StyleSheet.absoluteFillObject}
+        style={styles.fullVideoPlane}
         source={{
           uri: streamData.m3u8,
           overrideFileExtensionAndroid: 'm3u8',
@@ -938,94 +996,106 @@ export default function Player({ route, navigation }) {
         shouldPlay
       />
 
-      {/* HARDWARE BRIGHTNESS DIMMING OVERLAY */}
+      {/* HARDWARE BRIGHTNESS DIMMER */}
       <View 
         style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${brightnessLevel})` }]} 
         pointerEvents="none" 
       />
 
-      {/* TOAST GESTURE INDICATOR */}
-      {toastMessage && (
-        <View style={styles.toastContainer} pointerEvents="none">
-          <Text style={styles.toastText}>{toastMessage}</Text>
-        </View>
-      )}
-
-      {/* SUBTITLE RENDERER */}
-      {selectedSubTrackIndex >= 0 && currentSubtitleText !== '' && (
+      {/* HIGH-PERFORMANCE VTT SUBTITLES */}
+      {subtitlesEnabled && currentActiveSub !== '' && (
         <View 
-          style={[styles.subtitleContainer, { bottom: computedSubtitleBottom }]} 
+          style={[styles.subtitleWrapper, { bottom: calculatedSubtitleBottom }]} 
           pointerEvents="none"
         >
-          <Text 
-            style={[
-              styles.subtitleText, 
-              { 
-                color: subColor, 
-                fontSize: subSize, 
-                backgroundColor: `rgba(0,0,0,${subBgOpacity})` 
-              }
-            ]}
-          >
-            {currentSubtitleText}
+          <Text style={[
+            styles.subtitleTypography, 
+            { 
+              color: subStyle.color, 
+              fontSize: subStyle.size,
+              backgroundColor: `rgba(0,0,0,${subStyle.bgOpacity})`
+            }
+          ]}>
+            {currentActiveSub}
           </Text>
         </View>
       )}
 
       {/* WHITE BUFFERING INDICATOR */}
-      {(!status.isLoaded || status.isBuffering) && (
-        <View style={styles.bufferingContainer} pointerEvents="none">
+      {isBufferingDebounced && (
+        <View style={styles.centeredBufferPlane} pointerEvents="none">
           <ActivityIndicator size="large" color="#FFFFFF" />
         </View>
       )}
 
-      {/* DOUBLE TAP ACCUMULATIVE SEEK INDICATOR */}
+      {/* SWIPE TOAST FEEDBACK */}
+      {gestureNotice && (
+        <View style={styles.gestureNoticeBadge} pointerEvents="none">
+          <Text style={styles.gestureNoticeText}>{gestureNotice}</Text>
+        </View>
+      )}
+
+      {/* DOUBLE TAP ANIMATION BADGES */}
       <Animated.View 
         style={[
-          styles.seekIndicatorContainer,
-          seekDirection === 'left' ? styles.seekLeftPos : styles.seekRightPos,
-          { opacity: seekIndicatorAnim, transform: [{ scale: seekIndicatorAnim }] }
+          styles.doubleTapBadge, 
+          { left: '15%', opacity: doubleTapLeftAnim, transform: [{ scale: doubleTapLeftAnim }] }
         ]} 
         pointerEvents="none"
       >
-        {seekDirection === 'left' ? <IconReplay10 size={36} /> : <IconForward10 size={36} />}
-        <Text style={styles.seekIndicatorText}>{Math.abs(seekDelta)} seconds</Text>
+        <IconReplay10 size={36} color="#FFF" />
+        <Text style={styles.doubleTapBadgeText}>
+          {accumulatedSeek.direction === 'left' ? `-${accumulatedSeek.seconds}s` : '-10s'}
+        </Text>
       </Animated.View>
 
-      {/* TOUCH LISTENER & PAN RESPONDER LAYER */}
-      <View {...panResponder.panHandlers} style={StyleSheet.absoluteFillObject}>
-        <TouchableWithoutFeedback onPress={handleTouchZone}>
+      <Animated.View 
+        style={[
+          styles.doubleTapBadge, 
+          { right: '15%', opacity: doubleTapRightAnim, transform: [{ scale: doubleTapRightAnim }] }
+        ]} 
+        pointerEvents="none"
+      >
+        <IconForward10 size={36} color="#FFF" />
+        <Text style={styles.doubleTapBadgeText}>
+          {accumulatedSeek.direction === 'right' ? `+${accumulatedSeek.seconds}s` : '+10s'}
+        </Text>
+      </Animated.View>
+
+      {/* TOUCH & PAN SENSING SURFACE */}
+      <View {...panResponder.panHandlers} style={[StyleSheet.absoluteFillObject, { zIndex: 5 }]}>
+        <TouchableWithoutFeedback onPress={onOverlayTap}>
           <View style={StyleSheet.absoluteFillObject} />
         </TouchableWithoutFeedback>
       </View>
 
-      {/* NETFLIX-STYLE METADATA BANNER OVERLAY */}
+      {/* NETFLIX METADATA OVERLAY */}
       {tmdbMeta && (
         <Animated.View 
-          style={[styles.netflixMetaOverlay, { opacity: metaOverlayOpacity }]} 
+          style={[styles.netflixMetaVignette, { opacity: infoOverlayOpacity }]} 
           pointerEvents="none"
         >
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
             <Defs>
-              <LinearGradient id="metaGrad" x1="0" y1="0" x2="1" y2="1">
+              <LinearGradient id="metaVignetteGrad" x1="0" y1="0" x2="1" y2="1">
                 <Stop offset="0" stopColor="#000000" stopOpacity="0.88" />
-                <Stop offset="0.65" stopColor="#000000" stopOpacity="0.4" />
+                <Stop offset="0.55" stopColor="#000000" stopOpacity="0.45" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill="url(#metaGrad)" />
+            <Rect width="100%" height="100%" fill="url(#metaVignetteGrad)" />
           </Svg>
-          <View style={styles.metaContentBox}>
-            <View style={styles.metaHeaderRow}>
+          <View style={styles.metaTextCluster}>
+            <View style={styles.metaBadgeRow}>
               {tmdbMeta.certification && (
-                <View style={styles.certBadge}>
-                  <Text style={styles.certBadgeText}>{tmdbMeta.certification}</Text>
+                <View style={styles.certPill}>
+                  <Text style={styles.certPillText}>{tmdbMeta.certification}</Text>
                 </View>
               )}
-              {tmdbMeta.genres ? <Text style={styles.genreTags}>{tmdbMeta.genres}</Text> : null}
+              {tmdbMeta.genres ? <Text style={styles.genreBulletText}>{tmdbMeta.genres}</Text> : null}
             </View>
-            <Text style={styles.metaEpisodeTitle} numberOfLines={1}>
-              S{tmdbMeta.seasonNumber} E{tmdbMeta.episodeNumber} — {tmdbMeta.title}
+            <Text style={styles.metaTitleText} numberOfLines={1}>
+              S{tmdbMeta.season} E{tmdbMeta.episode} — {tmdbMeta.title}
             </Text>
             {tmdbMeta.overview ? (
               <Text style={styles.metaOverviewText} numberOfLines={3}>
@@ -1037,346 +1107,411 @@ export default function Player({ route, navigation }) {
       )}
 
       {/* SKIP INTRO BUTTON */}
-      {inIntro && (
-        <Animated.View 
-          style={[
-            styles.skipIntroContainer, 
-            { opacity: skipButtonAnim, transform: [{ scale: skipButtonAnim }] }
-          ]}
-        >
-          <PressableScale 
-            style={styles.skipIntroButton}
-            onPress={() => videoRef.current?.setPositionAsync(introRegion.end * 1000)}
+      {showSkipIntro && (
+        <Animated.View style={[
+          styles.introSkipContainer, 
+          { opacity: skipIntroAnim, transform: [{ translateY: skipIntroAnim.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }
+        ]}>
+          <TouchableOpacity 
+            style={styles.introSkipButton}
+            activeOpacity={0.85}
+            onPress={() => {
+              if (videoRef.current) {
+                videoRef.current.setPositionAsync(introRegion.end * 1000);
+              }
+              setShowSkipIntro(false);
+            }}
           >
-            <Text style={styles.skipIntroText}>Skip Intro</Text>
+            <Text style={styles.introSkipButtonText}>Skip Intro</Text>
             <IconForward10 size={16} color="#000" />
-          </PressableScale>
+          </TouchableOpacity>
         </Animated.View>
       )}
 
-      {/* SKIP OUTRO / PLAY NEXT EPISODE CARD */}
-      {inOutro && hasNextEpisode && !nextEpisodeDismissed && (
-        <Animated.View 
-          style={[
-            styles.nextCardContainer, 
-            { opacity: nextCardAnim, transform: [{ scale: nextCardAnim }] }
-          ]}
-        >
-          <View style={styles.nextCardHeader}>
-            <Text style={styles.nextCardSubtitle}>NEXT EPISODE</Text>
-            <TouchableOpacity onPress={() => setNextEpisodeDismissed(true)}>
-              <Text style={styles.nextCardDismiss}>✕</Text>
+      {/* SKIP OUTRO BUTTON */}
+      {showSkipOutro && (
+        <Animated.View style={[
+          styles.outroSkipContainer, 
+          { opacity: skipOutroAnim, transform: [{ translateY: skipOutroAnim.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }
+        ]}>
+          <TouchableOpacity 
+            style={styles.outroSkipButton}
+            activeOpacity={0.85}
+            onPress={() => {
+              if (videoRef.current && status.durationMillis) {
+                videoRef.current.setPositionAsync(status.durationMillis - 1000);
+              }
+            }}
+          >
+            <Text style={styles.outroSkipButtonText}>Skip Outro</Text>
+            <IconSkipNext size={16} color="#FFF" />
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
+      {/* NEXT EPISODE CARD */}
+      {showNextCard && hasNextEp && (
+        <Animated.View style={[
+          styles.nextEpisodeCard, 
+          { opacity: nextCardAnim, transform: [{ translateY: nextCardAnim.interpolate({ inputRange: [0, 1], outputRange: [30, 0] }) }] }
+        ]}>
+          <View style={styles.nextEpHeaderRow}>
+            <Text style={styles.nextEpSubTitle}>NEXT EPISODE</Text>
+            <TouchableOpacity onPress={() => setIsNextCardDismissed(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Text style={styles.nextEpCloseText}>✕</Text>
             </TouchableOpacity>
           </View>
-          <Text style={styles.nextCardTitle}>Episode {parseInt(episodeNum, 10) + 1}</Text>
-          <PressableScale style={styles.nextCardPlayBtn} onPress={handleNextEpisode}>
+          <Text style={styles.nextEpNameText} numberOfLines={1}>
+            Episode {parseInt(episodeNum, 10) + 1} {nextEpData?.title ? `• ${nextEpData.title}` : ''}
+          </Text>
+          <TouchableOpacity 
+            style={styles.nextEpPlayAction}
+            activeOpacity={0.85}
+            onPress={handleNextEpisode}
+          >
             <IconPlay size={16} color="#000" />
-            <Text style={styles.nextCardPlayBtnText}>Play Next</Text>
-          </PressableScale>
+            <Text style={styles.nextEpPlayActionText}>Play Next</Text>
+          </TouchableOpacity>
         </Animated.View>
       )}
 
-      {/* CINEMATIC GRADIENT & PLAYER CONTROL DECK */}
-      <Animated.View 
-        style={[styles.controlsDeck, { opacity: uiOpacity }]} 
-        pointerEvents={showUI ? 'auto' : 'none'}
-      >
-        {/* TOP GRADIENT BAR */}
-        <View style={styles.topControlBar}>
+      {/* FULL CONTROLS SYSTEM */}
+      <Animated.View style={[styles.controlsOverlay, { opacity: uiOpacity }]} pointerEvents={showUI ? 'auto' : 'none'}>
+        
+        {/* TOP CINEMATIC VIGNETTE & CONTROLS */}
+        <View style={styles.topVignette}>
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
-              <LinearGradient id="topGradient" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.9" />
+              <LinearGradient id="topVig" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.95" />
+                <Stop offset="0.6" stopColor="#000000" stopOpacity="0.45" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill="url(#topGradient)" />
+            <Rect width="100%" height="100%" fill="url(#topVig)" />
           </Svg>
 
-          <PressableScale style={styles.topBarBackButton} onPress={handleExitPlayer}>
-            <IconBackArrow size={26} />
-          </PressableScale>
-
-          <View style={styles.topBarTitleBox}>
-            <Text style={styles.topAnimeTitle} numberOfLines={1}>{animeTitle}</Text>
-            <Text style={styles.topEpisodeSubtitle}>
-              {tmdbMeta ? `Season ${tmdbMeta.seasonNumber} • Episode ${tmdbMeta.episodeNumber}` : `Episode ${episodeNum}`}
-            </Text>
+          <View style={styles.topBarContent}>
+            <TouchableOpacity 
+              onPress={handleClosePlayer} 
+              style={styles.iconHitTarget} 
+              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+            >
+              <IconBack size={24} color="#FFF" />
+            </TouchableOpacity>
+            <View style={styles.headerTitleBox}>
+              <Text style={styles.headerAnimeTitle} numberOfLines={1}>{animeTitle}</Text>
+              <Text style={styles.headerEpisodeSubtitle} numberOfLines={1}>
+                {tmdbMeta 
+                  ? `S${tmdbMeta.season} E${tmdbMeta.episode} • ${tmdbMeta.title}` 
+                  : `Episode ${episodeNum} ${episodeTitle ? `• ${episodeTitle}` : ''}`}
+              </Text>
+            </View>
           </View>
         </View>
 
-        {/* CENTER TRANSPORT CONTROLS */}
-        <View style={styles.centerControlDeck} pointerEvents="box-none">
-          <PressableScale style={styles.circleActionButton} onPress={() => handleSeekDelta(-10)}>
-            <IconReplay10 size={30} />
-          </PressableScale>
+        {/* CENTER INTERACTIVE CLUSTER */}
+        <View style={styles.centerCluster} pointerEvents="box-none">
+          <TouchableOpacity 
+            onPress={() => executeSeekDelta(-10)} 
+            style={styles.centerIconButton}
+            activeOpacity={0.75}
+          >
+            <IconReplay10 size={30} color="#FFF" />
+          </TouchableOpacity>
 
-          <PressableScale style={styles.circlePlayPauseButton} onPress={togglePlayPause}>
-            {status.isPlaying ? <IconPause size={38} /> : <IconPlay size={38} />}
-          </PressableScale>
+          <TouchableOpacity 
+            onPress={togglePlayPause} 
+            style={styles.centerPlayButton}
+            activeOpacity={0.85}
+          >
+            {status.isPlaying ? <IconPause size={36} color="#FFF" /> : <IconPlay size={36} color="#FFF" />}
+          </TouchableOpacity>
 
-          <PressableScale style={styles.circleActionButton} onPress={() => handleSeekDelta(10)}>
-            <IconForward10 size={30} />
-          </PressableScale>
+          <TouchableOpacity 
+            onPress={() => executeSeekDelta(10)} 
+            style={styles.centerIconButton}
+            activeOpacity={0.75}
+          >
+            <IconForward10 size={30} color="#FFF" />
+          </TouchableOpacity>
         </View>
 
-        {/* BOTTOM TIMELINE & DRAWER TRIGGERS */}
-        <View style={styles.bottomControlBar}>
+        {/* BOTTOM CINEMATIC VIGNETTE & CONTROLS */}
+        <View style={styles.bottomVignette}>
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
-              <LinearGradient id="botGradient" x1="0" y1="1" x2="0" y2="0">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.96" />
-                <Stop offset="0.75" stopColor="#000000" stopOpacity="0.6" />
+              <LinearGradient id="botVig" x1="0" y1="1" x2="0" y2="0">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.98" />
+                <Stop offset="0.6" stopColor="#000000" stopOpacity="0.5" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill="url(#botGradient)" />
+            <Rect width="100%" height="100%" fill="url(#botVig)" />
           </Svg>
 
-          {/* SCRUBBING TIMELINE */}
-          <View style={styles.timelineRow}>
-            <Text style={styles.timestampText}>
-              {formatTimestamp(isScrubbing ? scrubPosition : status.positionMillis)}
-            </Text>
-            <Slider
-              style={styles.timelineSlider}
-              minimumValue={0}
-              maximumValue={status.durationMillis || 100}
-              value={isScrubbing ? scrubPosition : (status.positionMillis || 0)}
-              minimumTrackTintColor={BRAND_RED}
-              maximumTrackTintColor="rgba(255,255,255,0.25)"
-              thumbTintColor={BRAND_RED}
-              onSlidingStart={handleSlidingStart}
-              onValueChange={handleSliderValueChange}
-              onSlidingComplete={handleSlidingComplete}
-            />
-            <Text style={styles.timestampText}>
-              {formatTimestamp(status.durationMillis)}
-            </Text>
-          </View>
-
-          {/* ACTION BUTTONS ROW */}
-          <View style={styles.bottomActionButtonsRow}>
-            <View style={styles.leftActionCluster}>
-              <PressableScale style={styles.iconHitBox} onPress={() => openDrawer('subtitles')}>
-                <IconSubtitles size={22} color={selectedSubTrackIndex >= 0 ? BRAND_RED : "#FFF"} />
-              </PressableScale>
+          <View style={styles.bottomBarContent}>
+            {/* PROGRESS SLIDER ROW */}
+            <View style={styles.sliderFlexRow}>
+              <Text style={styles.timeLabel}>
+                {formatTime(isDraggingSlider ? sliderPreviewMillis : (status.positionMillis || 0))}
+              </Text>
+              <Slider
+                style={styles.nativeSlider}
+                minimumValue={0}
+                maximumValue={status.durationMillis || 100}
+                value={isDraggingSlider ? sliderPreviewMillis : (status.positionMillis || 0)}
+                minimumTrackTintColor={BRAND_RED}
+                maximumTrackTintColor="rgba(255,255,255,0.22)"
+                thumbTintColor={BRAND_RED}
+                onValueChange={onSliderValueChange}
+                onSlidingComplete={onSliderSlidingComplete}
+              />
+              <Text style={styles.timeLabel}>{formatTime(status.durationMillis || 0)}</Text>
             </View>
 
-            <View style={styles.rightActionCluster}>
-              {introRegion.end > 0 && (
-                <PressableScale 
-                  style={styles.miniInlineSkipBtn} 
-                  onPress={() => videoRef.current?.setPositionAsync(introRegion.end * 1000)}
+            {/* ACTION BUTTONS ROW */}
+            <View style={styles.bottomActionsRow}>
+              <View style={styles.bottomLeftActions}>
+                <TouchableOpacity 
+                  style={styles.actionIconHit}
+                  onPress={() => openSidePanel('subtitles')}
                 >
-                  <Text style={styles.miniInlineSkipText}>Skip Intro</Text>
-                </PressableScale>
-              )}
+                  <IconSubs size={22} color={subtitlesEnabled ? "#FFF" : "#777"} />
+                  {subtitlesEnabled && <View style={styles.activeDotBadge} />}
+                </TouchableOpacity>
 
-              {hasNextEpisode && (
-                <PressableScale style={styles.iconHitBox} onPress={handleNextEpisode}>
-                  <IconNextEp size={22} />
-                </PressableScale>
-              )}
+                <TouchableOpacity 
+                  style={styles.actionIconHit}
+                  onPress={() => openSidePanel('audio')}
+                >
+                  <Text style={styles.pillTextButton}>{targetType.toUpperCase()}</Text>
+                </TouchableOpacity>
+              </View>
 
-              <PressableScale style={styles.iconHitBox} onPress={() => openDrawer('main')}>
-                <IconSettings size={22} />
-              </PressableScale>
+              <View style={styles.bottomRightActions}>
+                {hasNextEp && (
+                  <TouchableOpacity 
+                    style={styles.actionIconHit} 
+                    onPress={handleNextEpisode}
+                  >
+                    <IconSkipNext size={22} color="#FFF" />
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity 
+                  style={styles.actionIconHit} 
+                  onPress={() => openSidePanel('main')}
+                >
+                  <IconSettings size={22} color="#FFF" />
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </View>
+
       </Animated.View>
 
-      {/* =========================================================================
-          NETFLIX-STYLE RIGHT SLIDING DRAWER PANELS
-         ========================================================================= */}
-      {activeDrawer !== null && (
+      {/* NETFLIX-STYLE SLIDING RIGHT DRAWER */}
+      {activePanel && (
         <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
-          <TouchableWithoutFeedback onPress={closeDrawer}>
-            <View style={styles.drawerBackdrop} />
-          </TouchableWithoutFeedback>
+          <Animated.View style={[styles.panelScrimLayer, { opacity: panelBackdropOpacity }]}>
+            <TouchableWithoutFeedback onPress={closeSidePanel}>
+              <View style={StyleSheet.absoluteFillObject} />
+            </TouchableWithoutFeedback>
+          </Animated.View>
 
-          <Animated.View 
-            style={[
-              styles.drawerContainer, 
-              { width: panelWidth, transform: [{ translateX: drawerAnim }] }
-            ]}
-          >
-            {/* MAIN SETTINGS PANEL */}
-            {activeDrawer === 'main' && (
-              <ScrollView style={styles.drawerScroll} bounces={false}>
-                <Text style={styles.drawerHeader}>Settings</Text>
+          <Animated.View style={[
+            styles.panelDrawerSurface, 
+            { width: responsivePanelWidth, transform: [{ translateX: panelTranslateX }] }
+          ]}>
+            
+            {/* PANEL: MAIN SETTINGS */}
+            {activePanel === 'main' && (
+              <ScrollView style={styles.panelScroll} showsVerticalScrollIndicator={false}>
+                <Text style={styles.panelHeadline}>Settings</Text>
 
-                <TouchableOpacity style={styles.drawerRow} onPress={() => setActiveDrawer('quality')}>
-                  <Text style={styles.drawerRowTitle}>Quality</Text>
-                  <Text style={styles.drawerRowValue}>Auto ›</Text>
+                <TouchableOpacity style={styles.panelRowEntry} onPress={() => setActivePanel('quality')}>
+                  <Text style={styles.panelRowLabel}>Video Quality</Text>
+                  <Text style={styles.panelRowValue}>Auto (HLS) ›</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.drawerRow} onPress={() => setActiveDrawer('audio')}>
-                  <Text style={styles.drawerRowTitle}>Audio</Text>
-                  <Text style={styles.drawerRowValue}>{targetType === 'dub' ? 'English' : 'Japanese'} ›</Text>
+                <TouchableOpacity style={styles.panelRowEntry} onPress={() => setActivePanel('audio')}>
+                  <Text style={styles.panelRowLabel}>Audio Channel</Text>
+                  <Text style={styles.panelRowValue}>{targetType.toUpperCase()} ({activeServerName}) ›</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.drawerRow} onPress={() => setActiveDrawer('subtitles')}>
-                  <Text style={styles.drawerRowTitle}>Subtitles</Text>
-                  <Text style={styles.drawerRowValue}>
-                    {selectedSubTrackIndex >= 0 ? subtitleTracks[selectedSubTrackIndex]?.label || 'On' : 'Off'} ›
+                <TouchableOpacity style={styles.panelRowEntry} onPress={() => setActivePanel('subtitles')}>
+                  <Text style={styles.panelRowLabel}>Subtitles</Text>
+                  <Text style={styles.panelRowValue}>
+                    {subtitlesEnabled ? (availableSubTracks.find(s => s.file === selectedSubTrackUrl)?.label || 'On') : 'Off'} ›
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.drawerRow} onPress={() => setActiveDrawer('subtitle_style')}>
-                  <Text style={styles.drawerRowTitle}>Subtitle Style</Text>
-                  <Text style={styles.drawerRowValue}>Customize ›</Text>
+                <TouchableOpacity style={styles.panelRowEntry} onPress={() => setActivePanel('subtitle_styling')}>
+                  <Text style={styles.panelRowLabel}>Subtitle Styling</Text>
+                  <Text style={styles.panelRowValue}>Customize ›</Text>
                 </TouchableOpacity>
 
+                <TouchableOpacity style={styles.panelRowEntry} onPress={() => {
+                  const nextSpeed = playbackSpeed === 1.0 ? 1.25 : playbackSpeed === 1.25 ? 1.5 : playbackSpeed === 1.5 ? 2.0 : 1.0;
+                  setPlaybackSpeed(nextSpeed);
+                  if (videoRef.current) videoRef.current.setRateAsync(nextSpeed, true);
+                }}>
+                  <Text style={styles.panelRowLabel}>Playback Speed</Text>
+                  <Text style={styles.panelRowValue}>{playbackSpeed}x</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.panelRowEntry} onPress={() => {
+                  setResizeMode(prev => prev === ResizeMode.CONTAIN ? ResizeMode.COVER : ResizeMode.CONTAIN);
+                }}>
+                  <Text style={styles.panelRowLabel}>Aspect Ratio</Text>
+                  <Text style={styles.panelRowValue}>{resizeMode === ResizeMode.CONTAIN ? 'Fit Screen' : 'Fill Screen'}</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+
+            {/* PANEL: VIDEO QUALITY */}
+            {activePanel === 'quality' && (
+              <ScrollView style={styles.panelScroll} showsVerticalScrollIndicator={false}>
+                <TouchableOpacity style={styles.panelNavBack} onPress={() => setActivePanel('main')}>
+                  <Text style={styles.panelNavBackText}>‹ Settings</Text>
+                </TouchableOpacity>
+                <Text style={styles.panelHeadline}>Quality</Text>
+                <View style={styles.panelOptionSelected}>
+                  <Text style={[styles.panelOptionText, { color: BRAND_RED }]}>Auto (HLS Stream Adaptation)</Text>
+                  <IconCheck size={18} color={BRAND_RED} />
+                </View>
+                <Text style={styles.panelHelperNote}>
+                  ExoPlayer dynamically optimizes resolution based on connection bandwidth.
+                </Text>
+              </ScrollView>
+            )}
+
+            {/* PANEL: AUDIO STREAM */}
+            {activePanel === 'audio' && (
+              <ScrollView style={styles.panelScroll} showsVerticalScrollIndicator={false}>
+                <TouchableOpacity style={styles.panelNavBack} onPress={() => setActivePanel('main')}>
+                  <Text style={styles.panelNavBackText}>‹ Settings</Text>
+                </TouchableOpacity>
+                <Text style={styles.panelHeadline}>Audio & Format</Text>
+                <View style={styles.panelOptionSelected}>
+                  <Text style={[styles.panelOptionText, { color: BRAND_RED }]}>
+                    {targetType === 'dub' ? 'English Audio (Dub)' : 'Original Japanese (Sub)'}
+                  </Text>
+                  <IconCheck size={18} color={BRAND_RED} />
+                </View>
+                <Text style={styles.panelHelperNote}>
+                  Active Server: {activeServerName.toUpperCase()}
+                </Text>
+              </ScrollView>
+            )}
+
+            {/* PANEL: SUBTITLES SELECTION */}
+            {activePanel === 'subtitles' && (
+              <ScrollView style={styles.panelScroll} showsVerticalScrollIndicator={false}>
+                <TouchableOpacity style={styles.panelNavBack} onPress={() => setActivePanel('main')}>
+                  <Text style={styles.panelNavBackText}>‹ Settings</Text>
+                </TouchableOpacity>
+                <Text style={styles.panelHeadline}>Subtitles</Text>
+
                 <TouchableOpacity 
-                  style={styles.drawerRow} 
+                  style={[styles.panelOptionRow, !subtitlesEnabled && styles.panelOptionActiveBorder]}
                   onPress={() => {
-                    const nextSpeed = playbackSpeed === 1.0 ? 1.25 : playbackSpeed === 1.25 ? 1.5 : playbackSpeed === 1.5 ? 2.0 : 1.0;
-                    setPlaybackSpeed(nextSpeed);
-                    videoRef.current?.setRateAsync(nextSpeed, true);
+                    setSubtitlesEnabled(false);
+                    closeSidePanel();
                   }}
                 >
-                  <Text style={styles.drawerRowTitle}>Playback Speed</Text>
-                  <Text style={styles.drawerRowValue}>{playbackSpeed}x</Text>
+                  <Text style={[styles.panelOptionText, !subtitlesEnabled && { color: BRAND_RED }]}>Off</Text>
+                  {!subtitlesEnabled && <IconCheck size={18} color={BRAND_RED} />}
                 </TouchableOpacity>
 
-                <TouchableOpacity 
-                  style={styles.drawerRow} 
-                  onPress={() => setResizeMode(resizeMode === ResizeMode.CONTAIN ? ResizeMode.COVER : ResizeMode.CONTAIN)}
-                >
-                  <Text style={styles.drawerRowTitle}>Aspect Ratio</Text>
-                  <Text style={styles.drawerRowValue}>{resizeMode === ResizeMode.CONTAIN ? 'Fit' : 'Fill'}</Text>
-                </TouchableOpacity>
-              </ScrollView>
-            )}
-
-            {/* QUALITY PANEL */}
-            {activeDrawer === 'quality' && (
-              <ScrollView style={styles.drawerScroll} bounces={false}>
-                <TouchableOpacity style={styles.drawerBackNav} onPress={() => setActiveDrawer('main')}>
-                  <Text style={styles.drawerBackNavText}>‹ Back</Text>
-                </TouchableOpacity>
-                <Text style={styles.drawerHeader}>Quality</Text>
-
-                <TouchableOpacity style={styles.drawerSelectableRow} onPress={closeDrawer}>
-                  <Text style={[styles.drawerSelectableText, { color: BRAND_RED }]}>Auto (HLS Stream)</Text>
-                  <IconCheck size={18} />
-                </TouchableOpacity>
-              </ScrollView>
-            )}
-
-            {/* AUDIO PANEL */}
-            {activeDrawer === 'audio' && (
-              <ScrollView style={styles.drawerScroll} bounces={false}>
-                <TouchableOpacity style={styles.drawerBackNav} onPress={() => setActiveDrawer('main')}>
-                  <Text style={styles.drawerBackNavText}>‹ Back</Text>
-                </TouchableOpacity>
-                <Text style={styles.drawerHeader}>Audio</Text>
-
-                <TouchableOpacity style={styles.drawerSelectableRow} onPress={closeDrawer}>
-                  <Text style={[styles.drawerSelectableText, { color: BRAND_RED }]}>
-                    {targetType === 'dub' ? 'English (Stream Default)' : 'Japanese (Original)'}
-                  </Text>
-                  <IconCheck size={18} />
-                </TouchableOpacity>
-              </ScrollView>
-            )}
-
-            {/* SUBTITLES PANEL */}
-            {activeDrawer === 'subtitles' && (
-              <ScrollView style={styles.drawerScroll} bounces={false}>
-                <TouchableOpacity style={styles.drawerBackNav} onPress={() => setActiveDrawer('main')}>
-                  <Text style={styles.drawerBackNavText}>‹ Back</Text>
-                </TouchableOpacity>
-                <Text style={styles.drawerHeader}>Subtitles</Text>
-
-                <TouchableOpacity 
-                  style={styles.drawerSelectableRow} 
-                  onPress={() => { setSelectedSubTrackIndex(-1); closeDrawer(); }}
-                >
-                  <Text style={[styles.drawerSelectableText, selectedSubTrackIndex === -1 && { color: BRAND_RED }]}>
-                    Off
-                  </Text>
-                  {selectedSubTrackIndex === -1 && <IconCheck size={18} />}
-                </TouchableOpacity>
-
-                {subtitleTracks.map((item, idx) => (
-                  <TouchableOpacity 
-                    key={idx} 
-                    style={styles.drawerSelectableRow} 
-                    onPress={() => { setSelectedSubTrackIndex(idx); closeDrawer(); }}
-                  >
-                    <Text style={[styles.drawerSelectableText, selectedSubTrackIndex === idx && { color: BRAND_RED }]}>
-                      {item.label || `Track ${idx + 1}`}
-                    </Text>
-                    {selectedSubTrackIndex === idx && <IconCheck size={18} />}
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            )}
-
-            {/* SUBTITLE STYLES PANEL */}
-            {activeDrawer === 'subtitle_style' && (
-              <ScrollView style={styles.drawerScroll} bounces={false}>
-                <TouchableOpacity style={styles.drawerBackNav} onPress={() => setActiveDrawer('main')}>
-                  <Text style={styles.drawerBackNavText}>‹ Back</Text>
-                </TouchableOpacity>
-                <Text style={styles.drawerHeader}>Subtitle Styles</Text>
-
-                <Text style={styles.drawerSectionLabel}>Text Color</Text>
-                <View style={styles.colorPaletteRow}>
-                  {['#FFFFFF', '#F47521', '#FACC15', '#4ADE80'].map(hex => (
+                {availableSubTracks.map((trk, idx) => {
+                  const isSelected = subtitlesEnabled && selectedSubTrackUrl === trk.file;
+                  return (
                     <TouchableOpacity 
-                      key={hex} 
-                      onPress={() => setSubColor(hex)} 
-                      style={[styles.colorBubble, { backgroundColor: hex }, subColor === hex && styles.colorBubbleActive]} 
+                      key={`${trk.file}-${idx}`}
+                      style={[styles.panelOptionRow, isSelected && styles.panelOptionActiveBorder]}
+                      onPress={() => {
+                        setSubtitlesEnabled(true);
+                        setSelectedSubTrackUrl(trk.file);
+                        closeSidePanel();
+                      }}
+                    >
+                      <Text style={[styles.panelOptionText, isSelected && { color: BRAND_RED }]}>
+                        {trk.label || `Track ${idx + 1}`}
+                      </Text>
+                      {isSelected && <IconCheck size={18} color={BRAND_RED} />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            {/* PANEL: SUBTITLE STYLING */}
+            {activePanel === 'subtitle_styling' && (
+              <ScrollView style={styles.panelScroll} showsVerticalScrollIndicator={false}>
+                <TouchableOpacity style={styles.panelNavBack} onPress={() => setActivePanel('main')}>
+                  <Text style={styles.panelNavBackText}>‹ Settings</Text>
+                </TouchableOpacity>
+                <Text style={styles.panelHeadline}>Subtitle Appearance</Text>
+
+                <Text style={styles.styleSectionTag}>Color</Text>
+                <View style={styles.styleColorsRow}>
+                  {['#FFFFFF', '#F47521', '#FACC15', '#4ADE80', '#60A5FA'].map(hex => (
+                    <TouchableOpacity 
+                      key={hex}
+                      style={[styles.colorBubble, { backgroundColor: hex }, subStyle.color === hex && styles.colorBubbleActive]}
+                      onPress={() => setSubStyle(prev => ({ ...prev, color: hex }))}
                     />
                   ))}
                 </View>
 
-                <Text style={styles.drawerSectionLabel}>Font Size</Text>
-                <View style={styles.pillSelectionRow}>
-                  {[14, 16, 20, 24].map(px => (
+                <Text style={styles.styleSectionTag}>Font Size</Text>
+                <View style={styles.stylePillsRow}>
+                  {[14, 16, 20, 24].map(sz => (
                     <TouchableOpacity 
-                      key={px} 
-                      onPress={() => setSubSize(px)} 
-                      style={[styles.pillButton, subSize === px && styles.pillButtonActive]}
+                      key={sz}
+                      style={[styles.stylePill, subStyle.size === sz && styles.stylePillActive]}
+                      onPress={() => setSubStyle(prev => ({ ...prev, size: sz }))}
                     >
-                      <Text style={[styles.pillButtonText, subSize === px && { color: BRAND_RED }]}>{px}</Text>
+                      <Text style={[styles.stylePillLabel, subStyle.size === sz && { color: BRAND_RED }]}>{sz}px</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
 
-                <Text style={styles.drawerSectionLabel}>Position Offset</Text>
-                <View style={styles.pillSelectionRow}>
-                  {[20, 35, 60].map(h => (
+                <Text style={styles.styleSectionTag}>Background Opacity</Text>
+                <View style={styles.stylePillsRow}>
+                  {[0, 0.45, 0.75].map(op => (
                     <TouchableOpacity 
-                      key={h} 
-                      onPress={() => setSubElevation(h)} 
-                      style={[styles.pillButton, subElevation === h && styles.pillButtonActive]}
+                      key={op}
+                      style={[styles.stylePill, subStyle.bgOpacity === op && styles.stylePillActive]}
+                      onPress={() => setSubStyle(prev => ({ ...prev, bgOpacity: op }))}
                     >
-                      <Text style={[styles.pillButtonText, subElevation === h && { color: BRAND_RED }]}>{h}px</Text>
+                      <Text style={[styles.stylePillLabel, subStyle.bgOpacity === op && { color: BRAND_RED }]}>
+                        {op === 0 ? 'None' : `${Math.round(op * 100)}%`}
+                      </Text>
                     </TouchableOpacity>
                   ))}
                 </View>
 
-                <Text style={styles.drawerSectionLabel}>Background Opacity</Text>
-                <View style={styles.pillSelectionRow}>
-                  {[0.0, 0.45, 0.75].map(op => (
+                <Text style={styles.styleSectionTag}>Vertical Height</Text>
+                <View style={styles.stylePillsRow}>
+                  {[25, 45, 75].map(elev => (
                     <TouchableOpacity 
-                      key={op} 
-                      onPress={() => setSubBgOpacity(op)} 
-                      style={[styles.pillButton, subBgOpacity === op && styles.pillButtonActive]}
+                      key={elev}
+                      style={[styles.stylePill, subStyle.elevation === elev && styles.stylePillActive]}
+                      onPress={() => setSubStyle(prev => ({ ...prev, elevation: elev }))}
                     >
-                      <Text style={[styles.pillButtonText, subBgOpacity === op && { color: BRAND_RED }]}>
-                        {op === 0.0 ? 'None' : `${Math.round(op * 100)}%`}
+                      <Text style={[styles.stylePillLabel, subStyle.elevation === elev && { color: BRAND_RED }]}>
+                        {elev === 25 ? 'Low' : elev === 45 ? 'Normal' : 'High'}
                       </Text>
                     </TouchableOpacity>
                   ))}
                 </View>
               </ScrollView>
             )}
+
           </Animated.View>
         </View>
       )}
@@ -1384,211 +1519,109 @@ export default function Player({ route, navigation }) {
   );
 }
 
-// =========================================================================
-// STYLES
-// =========================================================================
 const styles = StyleSheet.create({
-  rootContainer: { flex: 1, backgroundColor: '#000000' },
-  blackBackgroundCenter: { flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  loadingStreamText: { color: '#888888', marginTop: 14, fontSize: 13, letterSpacing: 0.5 },
-  bufferingContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 4 },
+  rootPlayerContainer: { flex: 1, backgroundColor: '#000000' },
+  fullVideoPlane: { ...StyleSheet.absoluteFillObject },
 
-  // Toast Notifications
-  toastContainer: { 
-    position: 'absolute', 
-    top: 36, 
-    alignSelf: 'center', 
-    backgroundColor: 'rgba(0,0,0,0.82)', 
-    paddingHorizontal: 18, 
-    paddingVertical: 7, 
-    borderRadius: 20, 
-    zIndex: 25,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)'
-  },
-  toastText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  // Status & Loading Screens
+  cinematicLoadingContainer: { flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' },
+  cinematicLoadingText: { color: '#AAAAAA', fontSize: 13, marginTop: 14, letterSpacing: 0.5 },
+  centeredBufferPlane: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 4 },
+
+  errorSurfaceContainer: { flex: 1, backgroundColor: '#080808', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 30 },
+  errorPrimaryText: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold', marginBottom: 8 },
+  errorSecondaryText: { color: '#888888', fontSize: 12, textAlign: 'center', marginBottom: 24, lineHeight: 18 },
+  errorActionsRow: { flexDirection: 'row', gap: 14 },
+  errorPillBtn: { backgroundColor: BRAND_RED, paddingHorizontal: 22, paddingVertical: 10, borderRadius: 6 },
+  errorPillBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: 'bold' },
+
+  // Gestures & Double Tap
+  gestureNoticeBadge: { position: 'absolute', top: 38, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.82)', paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20, zIndex: 20 },
+  gestureNoticeText: { color: '#FFFFFF', fontSize: 13, fontWeight: 'bold' },
+  doubleTapBadge: { position: 'absolute', top: '44%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.65)', padding: 18, borderRadius: 45, zIndex: 8 },
+  doubleTapBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: 'bold', marginTop: 4 },
 
   // Subtitles
-  subtitleContainer: { position: 'absolute', width: '100%', alignItems: 'center', zIndex: 9, paddingHorizontal: 40 },
-  subtitleText: { 
-    fontWeight: '900', 
-    textAlign: 'center', 
-    textShadowColor: '#000000', 
-    textShadowOffset: { width: 1, height: 1 }, 
-    textShadowRadius: 4, 
-    paddingHorizontal: 10, 
-    paddingVertical: 3, 
-    borderRadius: 4 
-  },
+  subtitleWrapper: { position: 'absolute', width: '100%', alignItems: 'center', paddingHorizontal: 40, zIndex: 6 },
+  subtitleTypography: { fontWeight: '800', textAlign: 'center', textShadowColor: '#000', textShadowOffset: { width: 1.5, height: 1.5 }, textShadowRadius: 3, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, lineHeight: 22 },
 
-  // Seeking Bubbles
-  seekIndicatorContainer: { 
-    position: 'absolute', 
-    top: '40%', 
-    alignItems: 'center', 
-    backgroundColor: 'rgba(0,0,0,0.72)', 
-    padding: 20, 
-    borderRadius: 50,
-    zIndex: 15
-  },
-  seekLeftPos: { left: '16%' },
-  seekRightPos: { right: '16%' },
-  seekIndicatorText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800', marginTop: 6 },
+  // Netflix Information Overlay
+  netflixMetaVignette: { position: 'absolute', top: 50, left: 30, width: '45%', borderRadius: 8, overflow: 'hidden', padding: 14, zIndex: 7 },
+  metaTextCluster: { zIndex: 2 },
+  metaBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  certPill: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.45)', borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
+  certPillText: { color: '#FFFFFF', fontSize: 9, fontWeight: 'bold' },
+  genreBulletText: { color: '#CCCCCC', fontSize: 10, fontWeight: '600' },
+  metaTitleText: { color: '#FFFFFF', fontSize: 14, fontWeight: 'bold', marginVertical: 4 },
+  metaOverviewText: { color: '#AAAAAA', fontSize: 10, lineHeight: 15 },
 
-  // Netflix Metadata Banner
-  netflixMetaOverlay: {
-    position: 'absolute',
-    top: 72,
-    left: 28,
-    width: 380,
-    borderRadius: 8,
-    overflow: 'hidden',
-    padding: 16,
-    zIndex: 8
-  },
-  metaContentBox: { zIndex: 2 },
-  metaHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-  certBadge: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
-  certBadgeText: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
-  genreTags: { color: '#CCCCCC', fontSize: 11, fontWeight: '600' },
-  metaEpisodeTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '800', marginVertical: 4 },
-  metaOverviewText: { color: '#BBBBBB', fontSize: 11, lineHeight: 15 },
+  // Skip Buttons
+  introSkipContainer: { position: 'absolute', bottom: 100, right: 30, zIndex: 25 },
+  introSkipButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 9, borderRadius: 4, gap: 6 },
+  introSkipButtonText: { color: '#000000', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
 
-  // Skip Intro Floating Button
-  skipIntroContainer: { position: 'absolute', bottom: 110, right: 34, zIndex: 30 },
-  skipIntroButton: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    backgroundColor: '#FFFFFF', 
-    paddingHorizontal: 16, 
-    paddingVertical: 9, 
-    borderRadius: 6, 
-    gap: 6 
-  },
-  skipIntroText: { color: '#000000', fontWeight: '900', fontSize: 12, textTransform: 'uppercase' },
+  outroSkipContainer: { position: 'absolute', bottom: 100, right: 30, zIndex: 25 },
+  outroSkipButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(30,30,30,0.92)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', paddingHorizontal: 16, paddingVertical: 9, borderRadius: 4, gap: 6 },
+  outroSkipButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
 
   // Next Episode Card
-  nextCardContainer: {
-    position: 'absolute',
-    bottom: 95,
-    right: 30,
-    backgroundColor: 'rgba(18,18,18,0.95)',
-    borderRadius: 10,
-    padding: 16,
-    width: 220,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-    zIndex: 30
-  },
-  nextCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  nextCardSubtitle: { color: '#888888', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
-  nextCardDismiss: { color: '#AAAAAA', fontSize: 13, fontWeight: '700' },
-  nextCardTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '800', marginBottom: 12 },
-  nextCardPlayBtn: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    backgroundColor: '#FFFFFF', 
-    paddingVertical: 8, 
-    borderRadius: 5, 
-    gap: 6 
-  },
-  nextCardPlayBtnText: { color: '#000000', fontSize: 12, fontWeight: '800' },
+  nextEpisodeCard: { position: 'absolute', bottom: 95, right: 30, width: 230, backgroundColor: 'rgba(18,18,18,0.96)', borderRadius: 6, padding: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)', zIndex: 25 },
+  nextEpHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  nextEpSubTitle: { color: '#888888', fontSize: 9, fontWeight: 'bold', letterSpacing: 0.5 },
+  nextEpCloseText: { color: '#AAAAAA', fontSize: 12, fontWeight: 'bold' },
+  nextEpNameText: { color: '#FFFFFF', fontSize: 12, fontWeight: 'bold', marginBottom: 10 },
+  nextEpPlayAction: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF', paddingVertical: 6, borderRadius: 4, gap: 6 },
+  nextEpPlayActionText: { color: '#000000', fontSize: 11, fontWeight: '900' },
 
-  // Controls Deck Layout
-  controlsDeck: { ...StyleSheet.absoluteFillObject, zIndex: 10, justifyContent: 'space-between' },
-  topControlBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 26, paddingTop: 20, paddingBottom: 28, width: '100%' },
-  topBarBackButton: { marginRight: 18 },
-  topBarTitleBox: { flex: 1 },
-  topAnimeTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.3 },
-  topEpisodeSubtitle: { color: '#AAAAAA', fontSize: 12, fontWeight: '600', marginTop: 2 },
+  // Controls Layer
+  controlsOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 10, justifyContent: 'space-between' },
+  topVignette: { width: '100%', height: 110, justifyContent: 'flex-start' },
+  topBarContent: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 28, paddingTop: 20 },
+  iconHitTarget: { padding: 6, marginRight: 16 },
+  headerTitleBox: { flex: 1 },
+  headerAnimeTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.2 },
+  headerEpisodeSubtitle: { color: '#AAAAAA', fontSize: 11, fontWeight: '600', marginTop: 2 },
 
-  // Transport Center Controls
-  centerControlDeck: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 48 },
-  circlePlayPauseButton: { 
-    width: 72, 
-    height: 72, 
-    borderRadius: 36, 
-    backgroundColor: 'rgba(0,0,0,0.55)', 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    borderWidth: 1.5, 
-    borderColor: 'rgba(255,255,255,0.2)' 
-  },
-  circleActionButton: { 
-    width: 48, 
-    height: 48, 
-    borderRadius: 24, 
-    backgroundColor: 'rgba(0,0,0,0.4)', 
-    justifyContent: 'center', 
-    alignItems: 'center' 
-  },
+  centerCluster: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 45 },
+  centerPlayButton: { width: 68, height: 68, borderRadius: 34, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.2)' },
+  centerIconButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' },
 
-  // Bottom Controls
-  bottomControlBar: { width: '100%', paddingHorizontal: 28, paddingBottom: 22, paddingTop: 30 },
-  timelineRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  timestampText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  timelineSlider: { flex: 1, marginHorizontal: 10, height: 38 },
-  bottomActionButtonsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  leftActionCluster: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  rightActionCluster: { flexDirection: 'row', alignItems: 'center', gap: 18 },
-  iconHitBox: { minWidth: 44, minHeight: 44, justifyContent: 'center', alignItems: 'center' },
+  bottomVignette: { width: '100%', height: 120, justifyContent: 'flex-end' },
+  bottomBarContent: { paddingHorizontal: 28, paddingBottom: 16 },
+  sliderFlexRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  nativeSlider: { flex: 1, marginHorizontal: 8, height: 35 },
+  timeLabel: { color: '#CCCCCC', fontSize: 11, fontVariant: ['tabular-nums'], width: 44, textAlign: 'center' },
 
-  miniInlineSkipBtn: { backgroundColor: 'rgba(255,255,255,0.18)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 4 },
-  miniInlineSkipText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  bottomActionsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  bottomLeftActions: { flexDirection: 'row', alignItems: 'center', gap: 20 },
+  bottomRightActions: { flexDirection: 'row', alignItems: 'center', gap: 22 },
+  actionIconHit: { padding: 6, position: 'relative' },
+  activeDotBadge: { position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: 3, backgroundColor: BRAND_RED },
+  pillTextButton: { color: '#FFFFFF', fontSize: 11, fontWeight: 'bold', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
 
-  // Drawer Side Panel System
-  drawerBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.65)' },
-  drawerContainer: { 
-    position: 'absolute', 
-    right: 0, 
-    top: 0, 
-    bottom: 0, 
-    backgroundColor: 'rgba(16,16,16,0.96)', 
-    borderTopLeftRadius: 16, 
-    borderBottomLeftRadius: 16, 
-    borderLeftWidth: 1, 
-    borderColor: 'rgba(255,255,255,0.1)',
-    zIndex: 40 
-  },
-  drawerScroll: { padding: 22 },
-  drawerHeader: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', marginBottom: 16 },
-  drawerRow: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    paddingVertical: 14, 
-    borderBottomWidth: 1, 
-    borderBottomColor: 'rgba(255,255,255,0.06)' 
-  },
-  drawerRowTitle: { color: '#DDDDDD', fontSize: 14, fontWeight: '600' },
-  drawerRowValue: { color: BRAND_RED, fontSize: 13, fontWeight: '700' },
+  // Sliding Side Drawer Styles
+  panelScrimLayer: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 30 },
+  panelDrawerSurface: { position: 'absolute', top: 0, bottom: 0, right: 0, backgroundColor: 'rgba(14,14,14,0.98)', borderTopLeftRadius: 12, borderBottomLeftRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', zIndex: 31, paddingHorizontal: 22, paddingTop: 25 },
+  panelScroll: { flex: 1 },
+  panelHeadline: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold', marginBottom: 20 },
+  panelNavBack: { marginBottom: 12 },
+  panelNavBackText: { color: BRAND_RED, fontSize: 13, fontWeight: 'bold' },
+  panelRowEntry: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.06)' },
+  panelRowLabel: { color: '#E0E0E0', fontSize: 13, fontWeight: '600' },
+  panelRowValue: { color: '#888888', fontSize: 12, fontWeight: 'bold' },
 
-  drawerBackNav: { marginBottom: 14 },
-  drawerBackNavText: { color: BRAND_RED, fontSize: 14, fontWeight: '800' },
-  drawerSelectableRow: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    paddingVertical: 13, 
-    borderBottomWidth: 1, 
-    borderBottomColor: 'rgba(255,255,255,0.05)' 
-  },
-  drawerSelectableText: { color: '#DDDDDD', fontSize: 14, fontWeight: '600' },
+  panelOptionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.06)' },
+  panelOptionActiveBorder: { borderLeftWidth: 3, borderLeftColor: BRAND_RED, paddingLeft: 8 },
+  panelOptionSelected: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14 },
+  panelOptionText: { color: '#DDDDDD', fontSize: 13, fontWeight: '600' },
+  panelHelperNote: { color: '#666666', fontSize: 10, marginTop: 10, lineHeight: 14 },
 
-  drawerSectionLabel: { color: '#777777', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', marginTop: 14, marginBottom: 8 },
-  colorPaletteRow: { flexDirection: 'row', gap: 12, marginBottom: 10 },
+  styleSectionTag: { color: '#777777', fontSize: 11, fontWeight: 'bold', textTransform: 'uppercase', marginTop: 14, marginBottom: 8 },
+  styleColorsRow: { flexDirection: 'row', gap: 12, marginBottom: 8 },
   colorBubble: { width: 26, height: 26, borderRadius: 13 },
-  colorBubbleActive: { borderWidth: 2.5, borderColor: '#FFFFFF' },
-  pillSelectionRow: { flexDirection: 'row', gap: 10, marginBottom: 8 },
-  pillButton: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 5 },
-  pillButtonActive: { borderColor: BRAND_RED, borderWidth: 1 },
-  pillButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
-
-  // Error Card System
-  errorHeader: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', marginBottom: 6 },
-  errorSub: { color: '#888888', fontSize: 12, textAlign: 'center', marginBottom: 24, maxWidth: 380 },
-  errorButtonsRow: { flexDirection: 'row', gap: 14 },
-  errorActionButton: { backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 18, paddingVertical: 10, borderRadius: 6 },
-  errorActionText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 }
+  colorBubbleActive: { borderWidth: 2, borderColor: '#FFFFFF' },
+  stylePillsRow: { flexDirection: 'row', gap: 8, marginBottom: 6 },
+  stylePill: { backgroundColor: 'rgba(255,255,255,0.08)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 4 },
+  stylePillActive: { borderWidth: 1, borderColor: BRAND_RED },
+  stylePillLabel: { color: '#FFFFFF', fontSize: 11, fontWeight: 'bold' }
 });
