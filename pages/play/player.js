@@ -1,4 +1,4 @@
-Import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, Animated, 
   Dimensions, ActivityIndicator, StatusBar, BackHandler,
