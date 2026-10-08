@@ -14,18 +14,79 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
-// --- PREMIUM SVG ICONS (From Web & App) ---
-const IconPlay = ({ size = 26, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>);
-const IconPause = ({ size = 26, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></Svg>);
-const IconBackward = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" /></Svg>);
-const IconForward = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" /></Svg>);
-const IconBack = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><Path d="M19 12H5M12 19l-7-7 7-7"/></Svg>);
-const IconClose = ({ size = 20, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><Path d="M18 6L6 18M6 6l12 12" /></Svg>);
-const IconSubs = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 11H9.5v-1.5h-1.5v-2H9.5V10H11v5zm6 0h-1.5v-1.5h-1.5v-2h1.5V10H17v5z"/></Svg>);
-const IconAudio = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></Svg>);
-const IconLock = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></Svg>);
-const IconUnlock = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6h2c0-1.66 1.34-3 3-3s3 1.34 3 3v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm0 12H6V10h12v10zm-6-3c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/></Svg>);
-const IconScale = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M19 12h-2v3h-3v2h5v-5zM7 9h3V7H5v5h2V9zm14-6H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/></Svg>);
+// --- CLEAN SVG ICONS (STRICTLY NO EMOJIS) ---
+const IconPlay = ({ size = 26, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M8 5v14l11-7z" />
+  </Svg>
+);
+const IconPause = ({ size = 26, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+  </Svg>
+);
+const IconBackward = ({ size = 24, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
+  </Svg>
+);
+const IconForward = ({ size = 24, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
+  </Svg>
+);
+const IconBack = ({ size = 24, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M19 12H5M12 19l-7-7 7-7" />
+  </Svg>
+);
+const IconClose = ({ size = 18, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M18 6L6 18M6 6l12 12" />
+  </Svg>
+);
+const IconCheck = ({ size = 16, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M20 6L9 17l-5-5" />
+  </Svg>
+);
+const IconSubs = ({ size = 22, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 11H9.5v-1.5h-1.5v-2H9.5V10H11v5zm6 0h-1.5v-1.5h-1.5v-2h1.5V10H17v5z" />
+  </Svg>
+);
+const IconAudio = ({ size = 22, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
+  </Svg>
+);
+const IconLock = ({ size = 20, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6h2c0-1.66 1.34-3 3-3s3 1.34 3 3v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" />
+  </Svg>
+);
+const IconUnlock = ({ size = 20, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6h2c0-1.66 1.34-3 3-3s3 1.34 3 3v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm0 12H6V10h12v10zm-6-3c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z" />
+  </Svg>
+);
+const IconScale = ({ size = 20, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M19 12h-2v3h-3v2h5v-5zM7 9h3V7H5v5h2V9zm14-6H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z" />
+  </Svg>
+);
+const IconSun = ({ size = 16, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <Circle cx="12" cy="12" r="5" />
+    <Path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+  </Svg>
+);
+const IconVolume = ({ size = 16, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M11 5L6 9H2v6h4l5 4V5z" />
+    <Path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07" />
+  </Svg>
+);
 
 export default function Player({ route, navigation }) {
   const { 
@@ -43,8 +104,6 @@ export default function Player({ route, navigation }) {
   const uiOpacity = useRef(new Animated.Value(1)).current;
   const skipIntroOpacity = useRef(new Animated.Value(0)).current;
   const gestureToastOpacity = useRef(new Animated.Value(0)).current;
-  
-  // Bottom Sheet Animations
   const sheetTranslateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const sheetBackdropOpacity = useRef(new Animated.Value(0)).current;
 
@@ -52,20 +111,20 @@ export default function Player({ route, navigation }) {
   const [showUI, setShowUI] = useState(true);
   const [isLocked, setIsLocked] = useState(false);
   
-  // Settings / Adjustments
-  const [resizeMode, setResizeMode] = useState(ResizeMode.CONTAIN);
+  // Aspect ratio toggle: 'fit' -> 'crop' -> 'stretch'
+  const [aspectMode, setAspectMode] = useState('fit'); // 'fit' | 'crop' | 'stretch'
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [showSkipIndicator, setShowSkipIndicator] = useState(null); 
 
-  // Bottom Sheets State
-  const [activeMenu, setActiveMenu] = useState(null); // 'quality', 'subs', 'audio', 'speed'
+  // Settings Sub-Sheets: null | 'quality' | 'subs' | 'audio' | 'speed' | 'aspect'
+  const [activeMenu, setActiveMenu] = useState(null);
   
-  // Customization
+  // Subtitles custom styling
   const [subColor, setSubColor] = useState('#FFFFFF');
-  const [subSize, setSubSize] = useState(16);
-  const [subHeight, setSubHeight] = useState(30);
+  const [subSize, setSubSize] = useState(15);
+  const [subHeight, setSubHeight] = useState(25);
 
-  // Network & Stream State
+  // Network & Stream
   const [streamData, setStreamData] = useState(null);
   const [loadingStream, setLoadingStream] = useState(true);
   const [fatalError, setFatalError] = useState(null);
@@ -74,12 +133,12 @@ export default function Player({ route, navigation }) {
   const [selectedQuality, setSelectedQuality] = useState('Auto');
   const [currentAutoRes, setCurrentAutoRes] = useState('1080p');
 
-  // Gestures (Volume / Brightness)
+  // Gestures
   const [brightnessOverlay, setBrightnessOverlay] = useState(0); 
   const [volume, setVolume] = useState(1.0); 
-  const [gestureText, setGestureText] = useState(null);
+  const [gestureInfo, setGestureInfo] = useState(null); // { type: 'brightness'|'volume', text: string }
 
-  // Skip Intro State
+  // Skip Intro
   const [introData, setIntroData] = useState({ start: 0, end: 0 });
   const [showSkipButton, setShowSkipButton] = useState(false);
   const skipTimerRef = useRef(null);
@@ -92,15 +151,15 @@ export default function Player({ route, navigation }) {
   const hideUITimeout = useRef(null);
   const lastTapRef = useRef(0);
 
-  // 1. Force Landscape & Hardware Navigation
+  // 1. Force Landscape Permanently
   useEffect(() => {
-    async function lockOrientation() {
+    async function enforceLandscape() {
       try {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
       } catch (_) {}
       StatusBar.setHidden(true);
     }
-    lockOrientation();
+    enforceLandscape();
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (activeMenu) {
@@ -121,6 +180,7 @@ export default function Player({ route, navigation }) {
       StatusBar.setHidden(false);
       backHandler.remove();
       if (skipTimerRef.current) clearTimeout(skipTimerRef.current);
+      if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
     };
   }, [activeMenu, isLocked]);
 
@@ -130,7 +190,7 @@ export default function Player({ route, navigation }) {
     return true;
   };
 
-  // 2. Direct Network Resolution Engine (UNCHANGED)
+  // 2. Direct Network Resolution Engine (Preserved Exactly)
   useEffect(() => {
     let isMounted = true;
 
@@ -178,7 +238,7 @@ export default function Player({ route, navigation }) {
     return () => { isMounted = false; };
   }, [animeId, episodeNum, targetType]);
 
-  // 3. Subtitle Engine (UNCHANGED)
+  // 3. Subtitle Engine (Preserved Exactly)
   useEffect(() => {
     if (!streamData?.subtitles || streamData.subtitles.length === 0) return;
 
@@ -275,7 +335,7 @@ export default function Player({ route, navigation }) {
     }
   }, [status.positionMillis, subtitlesEnabled]);
 
-  // 5. Swipe Gestures
+  // 5. Gestures
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 15 && Math.abs(gestureState.dx) < 25,
@@ -288,7 +348,7 @@ export default function Player({ route, navigation }) {
           setBrightnessOverlay(prev => {
             let next = prev + (dy * 0.0035);
             next = Math.max(0, Math.min(next, 0.85));
-            setGestureText(`☀ Brightness ${Math.round((1 - next) * 100)}%`);
+            setGestureInfo({ type: 'brightness', text: `Brightness ${Math.round((1 - next) * 100)}%` });
             gestureToastOpacity.setValue(1);
             return next;
           });
@@ -299,21 +359,21 @@ export default function Player({ route, navigation }) {
             if (videoRef.current) {
               videoRef.current.setVolumeAsync(Math.min(next, 1.0));
             }
-            setGestureText(`🔊 Volume ${Math.round(next * 100)}%`);
+            setGestureInfo({ type: 'volume', text: `Volume ${Math.round(next * 100)}%` });
             gestureToastOpacity.setValue(1);
             return next;
           });
         }
       },
       onPanResponderRelease: () => {
-        Animated.timing(gestureToastOpacity, { toValue: 0, duration: 600, delay: 400, useNativeDriver: true }).start(() => {
-          setGestureText(null);
+        Animated.timing(gestureToastOpacity, { toValue: 0, duration: 500, delay: 350, useNativeDriver: true }).start(() => {
+          setGestureInfo(null);
         });
       }
     })
   ).current;
 
-  // 6. UI Auto-Hide Engine
+  // 6. UI Auto-Hide
   const resetHideTimer = useCallback(() => {
     if (activeMenu || isLocked) return; 
     setShowUI(true);
@@ -342,29 +402,37 @@ export default function Player({ route, navigation }) {
     setShowUI(true);
     Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
     resetHideTimer();
-  }
+  };
 
-  // Web-Style Bottom Sheet Navigation
+  // Bottom Sheet Controls
   const openSheet = (menuName) => {
     setActiveMenu(menuName);
     if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
     Animated.parallel([
-      Animated.spring(sheetTranslateY, { toValue: 0, useNativeDriver: true, tension: 65, friction: 10 }),
-      Animated.timing(sheetBackdropOpacity, { toValue: 1, duration: 250, useNativeDriver: true })
+      Animated.spring(sheetTranslateY, { toValue: 0, useNativeDriver: true, tension: 75, friction: 11 }),
+      Animated.timing(sheetBackdropOpacity, { toValue: 1, duration: 220, useNativeDriver: true })
     ]).start();
   };
 
   const closeSheet = () => {
     Animated.parallel([
-      Animated.timing(sheetTranslateY, { toValue: SCREEN_HEIGHT, duration: 250, useNativeDriver: true }),
-      Animated.timing(sheetBackdropOpacity, { toValue: 0, duration: 220, useNativeDriver: true })
+      Animated.timing(sheetTranslateY, { toValue: SCREEN_HEIGHT, duration: 220, useNativeDriver: true }),
+      Animated.timing(sheetBackdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true })
     ]).start(() => {
       setActiveMenu(null);
       resetHideTimer();
     });
   };
 
-  // Double-tap & Tap Overlay
+  // Aspect Ratio Mode Resolver
+  const cycleAspectMode = () => {
+    const nextMode = aspectMode === 'fit' ? 'crop' : aspectMode === 'crop' ? 'stretch' : 'fit';
+    setAspectMode(nextMode);
+    if (nextMode === 'fit') setResizeMode(ResizeMode.CONTAIN);
+    else if (nextMode === 'crop') setResizeMode(ResizeMode.COVER);
+    else if (nextMode === 'stretch') setResizeMode(ResizeMode.STRETCH);
+  };
+
   const handleTouchOverlay = (evt) => {
     if (activeMenu) { 
       closeSheet();
@@ -372,7 +440,7 @@ export default function Player({ route, navigation }) {
     }
     
     if (isLocked) {
-      showUIControls(); // Temporarily show the lock button to allow unlocking
+      showUIControls();
       return;
     }
 
@@ -391,7 +459,7 @@ export default function Player({ route, navigation }) {
       }
     } else {
       if (showUI) {
-        Animated.timing(uiOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setShowUI(false));
+        Animated.timing(uiOpacity, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => setShowUI(false));
         if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
       } else {
         resetHideTimer();
@@ -401,7 +469,7 @@ export default function Player({ route, navigation }) {
 
   const triggerSkipIndicator = (direction) => {
     setShowSkipIndicator(direction);
-    setTimeout(() => setShowSkipIndicator(null), 600);
+    setTimeout(() => setShowSkipIndicator(null), 550);
   };
 
   const togglePlayPause = () => {
@@ -437,6 +505,9 @@ export default function Player({ route, navigation }) {
     return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
   };
 
+  // Real Buffering Check: only while loaded and video is stalling during playback
+  const isVideoBufferingNow = !!(status.isLoaded && status.isBuffering);
+
   if (loadingStream) {
     return (
       <View style={styles.loaderContainerFull}>
@@ -460,7 +531,7 @@ export default function Player({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* NATIVE EXPO VIDEO ENGINE */}
+      {/* NATIVE EXPO VIDEO */}
       <Video
         ref={videoRef}
         style={styles.videoPlayer}
@@ -482,51 +553,52 @@ export default function Player({ route, navigation }) {
       {/* HARDWARE BRIGHTNESS OVERLAY */}
       <View style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${brightnessOverlay})` }]} pointerEvents="none" />
 
-      {/* CUSTOM VTT SUBTITLE DISPLAY */}
+      {/* SUBTITLE DISPLAY */}
       {subtitlesEnabled && currentSubText !== '' && (
-        <View style={[styles.subtitleContainer, { bottom: subHeight + (showUI ? 85 : 0) }]} pointerEvents="none">
+        <View style={[styles.subtitleContainer, { bottom: subHeight + (showUI ? 75 : 0) }]} pointerEvents="none">
           <Text style={[styles.subtitleText, { color: subColor, fontSize: subSize }]}>
             {currentSubText}
           </Text>
         </View>
       )}
 
-      {/* DYNAMIC WHITE BUFFERING SPINNER */}
-      {(!status.isLoaded || status.isBuffering) && (
+      {/* BUFFERING SPINNER (Strictly when actually buffering) */}
+      {isVideoBufferingNow && (
         <View style={styles.bufferingOverlay} pointerEvents="none">
-          <ActivityIndicator size="large" color="#FFFFFF" />
+          <ActivityIndicator size="large" color={BRAND_RED} />
         </View>
       )}
 
-      {/* SWIPE GESTURE TOAST */}
-      {gestureText && (
+      {/* SWIPE GESTURE TOAST NOTIFIER */}
+      {gestureInfo && (
         <Animated.View style={[styles.gestureToastContainer, { opacity: gestureToastOpacity }]} pointerEvents="none">
-          <Text style={styles.gestureToastText}>{gestureText}</Text>
+          {gestureInfo.type === 'brightness' ? <IconSun size={15} color="#FFF" /> : <IconVolume size={15} color="#FFF" />}
+          <Text style={styles.gestureToastText}>{gestureInfo.text}</Text>
         </Animated.View>
       )}
 
-      {/* TOUCH & PAN RESPONDER LAYER */}
+      {/* TOUCH SENSOR */}
       <View {...panResponder.panHandlers} style={[StyleSheet.absoluteFillObject, { zIndex: 5 }]}>
         <TouchableWithoutFeedback onPress={handleTouchOverlay}>
           <View style={StyleSheet.absoluteFillObject} />
         </TouchableWithoutFeedback>
       </View>
 
-      {/* DOUBLE TAP ANIMATIONS */}
+      {/* DOUBLE TAP ANIMATION NOTIFIERS */}
       {showSkipIndicator === 'left' && !isLocked && (
         <View style={styles.skipLeftInd} pointerEvents="none">
-          <IconBackward size={36} color="#FFF" />
+          <IconBackward size={32} color="#FFF" />
           <Text style={styles.skipText}>-10s</Text>
         </View>
       )}
       {showSkipIndicator === 'right' && !isLocked && (
         <View style={styles.skipRightInd} pointerEvents="none">
-          <IconForward size={36} color="#FFF" />
+          <IconForward size={32} color="#FFF" />
           <Text style={styles.skipText}>+10s</Text>
         </View>
       )}
 
-      {/* DYNAMIC SKIP INTRO FLOATING BUTTON */}
+      {/* SKIP INTRO BUTTON */}
       {showSkipButton && !isLocked && (
         <Animated.View style={[styles.skipIntroFloat, { opacity: skipIntroOpacity }]}>
           <TouchableOpacity 
@@ -540,7 +612,7 @@ export default function Player({ route, navigation }) {
         </Animated.View>
       )}
 
-      {/* UI OVERLAY LAYER (Matches Web UI Layout) */}
+      {/* UI OVERLAY LAYER */}
       <Animated.View style={[styles.uiLayer, { opacity: uiOpacity }]} pointerEvents={showUI ? 'box-none' : 'none'}>
         
         {/* TOP BAR */}
@@ -548,12 +620,12 @@ export default function Player({ route, navigation }) {
           <View style={styles.topBarWrapper}>
             <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
               <Defs>
-                <LinearGradient id="topCinematic" x1="0" y1="0" x2="0" y2="1">
+                <LinearGradient id="topG" x1="0" y1="0" x2="0" y2="1">
                   <Stop offset="0" stopColor="#000000" stopOpacity="0.95" />
                   <Stop offset="1" stopColor="#000000" stopOpacity="0" />
                 </LinearGradient>
               </Defs>
-              <Rect width="100%" height="100%" fill="url(#topCinematic)" />
+              <Rect width="100%" height="100%" fill="url(#topG)" />
             </Svg>
 
             <View style={styles.topBarContent}>
@@ -561,9 +633,11 @@ export default function Player({ route, navigation }) {
                 <TouchableOpacity onPress={handleClosePlayer} style={styles.iconBtn} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
                   <IconBack size={24} color="#FFF" />
                 </TouchableOpacity>
-                <View style={styles.titleColumn}>
+                
+                {/* Clean Titles: No padding or background behind text */}
+                <View style={styles.titleColumnClean}>
                   <Text style={styles.mainTitle} numberOfLines={1}>{animeTitle}</Text>
-                  <Text style={styles.subTitle}>Episode {episodeNum} {episodeTitle ? `• ${episodeTitle}` : ''}</Text>
+                  <Text style={styles.subTitle} numberOfLines={1}>Episode {episodeNum} {episodeTitle ? `• ${episodeTitle}` : ''}</Text>
                 </View>
               </View>
 
@@ -582,17 +656,17 @@ export default function Player({ route, navigation }) {
           </View>
         )}
 
-        {/* CENTER CONTROLS */}
+        {/* CENTER PLAY/PAUSE */}
         {!isLocked && (
           <View style={styles.centerControls} pointerEvents="box-none">
             <TouchableOpacity onPress={seekBackward} style={styles.iconBtnCenter} activeOpacity={0.7}>
-              <IconBackward size={36} color="#FFF" />
+              <IconBackward size={34} color="#FFF" />
             </TouchableOpacity>
             <TouchableOpacity onPress={togglePlayPause} style={styles.playPauseBtn} activeOpacity={0.8}>
               {status.isPlaying ? <IconPause size={42} color="#FFF" /> : <IconPlay size={42} color="#FFF" />}
             </TouchableOpacity>
             <TouchableOpacity onPress={seekForward} style={styles.iconBtnCenter} activeOpacity={0.7}>
-              <IconForward size={36} color="#FFF" />
+              <IconForward size={34} color="#FFF" />
             </TouchableOpacity>
           </View>
         )}
@@ -601,30 +675,41 @@ export default function Player({ route, navigation }) {
         <View style={styles.bottomBarWrapper}>
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
-              <LinearGradient id="botCinematic" x1="0" y1="1" x2="0" y2="0">
+              <LinearGradient id="botG" x1="0" y1="1" x2="0" y2="0">
                 <Stop offset="0" stopColor="#000000" stopOpacity="0.95" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill="url(#botCinematic)" />
+            <Rect width="100%" height="100%" fill="url(#botG)" />
           </Svg>
 
           <View style={styles.bottomContent}>
-            {/* Tools Row */}
+            {/* Tools Ribbon */}
             <View style={styles.bottomToolsRow}>
               <View style={styles.toolsLeft}>
                 <TouchableOpacity 
-                  onPress={() => { setIsLocked(!isLocked); if(!isLocked){ hideUITimeout.current && clearTimeout(hideUITimeout.current); Animated.timing(uiOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setShowUI(false)); } }} 
+                  onPress={() => {
+                    const nextLock = !isLocked;
+                    setIsLocked(nextLock);
+                    if (nextLock) {
+                      hideUITimeout.current && clearTimeout(hideUITimeout.current);
+                      Animated.timing(uiOpacity, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => setShowUI(false));
+                    }
+                  }} 
                   style={styles.iconBtn}
                 >
-                  {isLocked ? <IconLock size={22} color={BRAND_RED} /> : <IconUnlock size={22} color="#FFF" />}
+                  {isLocked ? <IconLock size={20} color={BRAND_RED} /> : <IconUnlock size={20} color="#FFF" />}
                 </TouchableOpacity>
                 
                 {!isLocked && (
                   <>
-                    <TouchableOpacity onPress={() => setResizeMode(resizeMode === ResizeMode.CONTAIN ? ResizeMode.COVER : ResizeMode.CONTAIN)} style={styles.iconBtn}>
-                      <IconScale size={22} color="#FFF" />
+                    <TouchableOpacity onPress={cycleAspectMode} style={styles.aspectPillBtn}>
+                      <IconScale size={18} color="#FFF" />
+                      <Text style={styles.aspectPillText}>
+                        {aspectMode === 'fit' ? 'Fit' : aspectMode === 'crop' ? 'Crop' : 'Stretch'}
+                      </Text>
                     </TouchableOpacity>
+
                     <TouchableOpacity onPress={() => openSheet('speed')}>
                       <Text style={styles.speedBtnText}>{playbackSpeed.toFixed(2)}x</Text>
                     </TouchableOpacity>
@@ -633,7 +718,7 @@ export default function Player({ route, navigation }) {
               </View>
             </View>
 
-            {/* Scrubber Row */}
+            {/* Timeline Row */}
             {!isLocked && (
               <View style={styles.progressRow}>
                 <Text style={styles.timeText}>{formatTime(status.positionMillis || 0)}</Text>
@@ -655,81 +740,118 @@ export default function Player({ route, navigation }) {
         </View>
       </Animated.View>
 
-      {/* NATIVE BOTTOM SHEETS (Web UI matching) */}
+      {/* COMPACT RED & WHITE SETTINGS MENUS (BOTTOM SHEETS) */}
       {activeMenu !== null && (
         <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
-          {/* Dismiss Backdrop */}
           <TouchableWithoutFeedback onPress={closeSheet}>
-            <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.6)', opacity: sheetBackdropOpacity }]} />
+            <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.5)', opacity: sheetBackdropOpacity }]} />
           </TouchableWithoutFeedback>
 
-          <Animated.View style={[styles.bottomSheetSurface, { transform: [{ translateY: sheetTranslateY }] }]}>
+          <Animated.View style={[styles.compactSheetSurface, { transform: [{ translateY: sheetTranslateY }] }]}>
             
-            {/* QUALITY SHEET */}
+            {/* QUALITY SHEET (DOWN TO 144P) */}
             {activeMenu === 'quality' && (
-              <View style={styles.sheetContent}>
-                <View style={styles.sheetHeaderRow}>
-                  <Text style={styles.sheetHeaderTitle}>Video Quality</Text>
-                  <TouchableOpacity onPress={closeSheet}><IconClose size={22} color="#888" /></TouchableOpacity>
-                </View>
-                <ScrollView showsVerticalScrollIndicator={false}>
-                  <TouchableOpacity style={[styles.sheetItem, selectedQuality === 'Auto' && styles.sheetItemActive]} onPress={() => { setSelectedQuality('Auto'); closeSheet(); }}>
-                    <Text style={[styles.sheetItemText, selectedQuality === 'Auto' && styles.sheetItemTextActive]}>Auto ({currentAutoRes})</Text>
+              <View style={styles.sheetInner}>
+                <View style={styles.sheetHeader}>
+                  <Text style={styles.sheetTitle}>Video Quality</Text>
+                  <TouchableOpacity onPress={closeSheet} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <IconClose size={18} color="#AAA" />
                   </TouchableOpacity>
-                  {['1080p', '720p', '480p', '360p'].map((q) => (
-                    <TouchableOpacity key={q} style={[styles.sheetItem, selectedQuality === q && styles.sheetItemActive]} onPress={() => { setSelectedQuality(q); closeSheet(); }}>
-                      <Text style={[styles.sheetItemText, selectedQuality === q && styles.sheetItemTextActive]}>{q}</Text>
-                    </TouchableOpacity>
-                  ))}
+                </View>
+                <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetListScroll}>
+                  <TouchableOpacity 
+                    style={[styles.compactRow, selectedQuality === 'Auto' && styles.compactRowActive]} 
+                    onPress={() => { setSelectedQuality('Auto'); closeSheet(); }}
+                  >
+                    <Text style={[styles.compactRowText, selectedQuality === 'Auto' && styles.compactRowTextActive]}>
+                      Auto ({currentAutoRes})
+                    </Text>
+                    {selectedQuality === 'Auto' && <IconCheck size={16} color="#FFF" />}
+                  </TouchableOpacity>
+
+                  {['1080p', '720p', '480p', '360p', '240p', '144p'].map((q) => {
+                    const isSelected = selectedQuality === q;
+                    return (
+                      <TouchableOpacity 
+                        key={q} 
+                        style={[styles.compactRow, isSelected && styles.compactRowActive]} 
+                        onPress={() => { setSelectedQuality(q); closeSheet(); }}
+                      >
+                        <Text style={[styles.compactRowText, isSelected && styles.compactRowTextActive]}>{q}</Text>
+                        {isSelected && <IconCheck size={16} color="#FFF" />}
+                      </TouchableOpacity>
+                    );
+                  })}
                 </ScrollView>
               </View>
             )}
 
             {/* AUDIO SHEET */}
             {activeMenu === 'audio' && (
-              <View style={styles.sheetContent}>
-                <View style={styles.sheetHeaderRow}>
-                  <Text style={styles.sheetHeaderTitle}>Audio Tracks</Text>
-                  <TouchableOpacity onPress={closeSheet}><IconClose size={22} color="#888" /></TouchableOpacity>
+              <View style={styles.sheetInner}>
+                <View style={styles.sheetHeader}>
+                  <Text style={styles.sheetTitle}>Audio Tracks</Text>
+                  <TouchableOpacity onPress={closeSheet}>
+                    <IconClose size={18} color="#AAA" />
+                  </TouchableOpacity>
                 </View>
-                <ScrollView showsVerticalScrollIndicator={false}>
-                  <TouchableOpacity style={styles.sheetItemActive}>
-                    <Text style={styles.sheetItemTextActive}>Default Audio (Japanese)</Text>
+                <View style={styles.sheetListScroll}>
+                  <TouchableOpacity style={[styles.compactRow, styles.compactRowActive]}>
+                    <Text style={[styles.compactRowText, styles.compactRowTextActive]}>Original (Japanese)</Text>
+                    <IconCheck size={16} color="#FFF" />
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.sheetAddBtn}>
-                    <Text style={styles.sheetAddBtnText}>+ Add Custom Audio</Text>
+                  <TouchableOpacity style={styles.compactRow}>
+                    <Text style={styles.compactRowText}>English (Dub)</Text>
                   </TouchableOpacity>
-                </ScrollView>
+                </View>
               </View>
             )}
 
             {/* SUBTITLES SHEET */}
             {activeMenu === 'subs' && (
-              <View style={styles.sheetContent}>
-                <View style={styles.sheetHeaderRow}>
-                  <Text style={styles.sheetHeaderTitle}>Subtitles & Styles</Text>
-                  <TouchableOpacity onPress={closeSheet}><IconClose size={22} color="#888" /></TouchableOpacity>
+              <View style={styles.sheetInner}>
+                <View style={styles.sheetHeader}>
+                  <Text style={styles.sheetTitle}>Subtitles & Style</Text>
+                  <TouchableOpacity onPress={closeSheet}>
+                    <IconClose size={18} color="#AAA" />
+                  </TouchableOpacity>
                 </View>
-                <ScrollView showsVerticalScrollIndicator={false}>
-                  <TouchableOpacity style={[styles.sheetItem, !subtitlesEnabled && styles.sheetItemActive]} onPress={() => { setSubtitlesEnabled(false); closeSheet(); }}>
-                    <Text style={[styles.sheetItemText, !subtitlesEnabled && styles.sheetItemTextActive]}>Off</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.sheetItem, subtitlesEnabled && styles.sheetItemActive]} onPress={() => { setSubtitlesEnabled(true); closeSheet(); }}>
-                    <Text style={[styles.sheetItemText, subtitlesEnabled && styles.sheetItemTextActive]}>English (Default)</Text>
-                  </TouchableOpacity>
+                <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetListScroll}>
+                  <View style={styles.switchGroupRow}>
+                    <TouchableOpacity 
+                      style={[styles.compactPill, !subtitlesEnabled && styles.compactPillActive]} 
+                      onPress={() => setSubtitlesEnabled(false)}
+                    >
+                      <Text style={[styles.compactPillText, !subtitlesEnabled && styles.compactPillTextActive]}>Off</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                      style={[styles.compactPill, subtitlesEnabled && styles.compactPillActive]} 
+                      onPress={() => setSubtitlesEnabled(true)}
+                    >
+                      <Text style={[styles.compactPillText, subtitlesEnabled && styles.compactPillTextActive]}>English</Text>
+                    </TouchableOpacity>
+                  </View>
 
-                  <Text style={styles.subStyleLabel}>Color</Text>
-                  <View style={styles.colorPalette}>
-                    {['#FFFFFF', '#F47521', '#FACC15', '#4ADE80'].map(c => (
-                      <TouchableOpacity key={c} onPress={() => setSubColor(c)} style={[styles.colorChip, { backgroundColor: c }, subColor === c && styles.colorChipActive]} />
+                  <Text style={styles.compactSectionLabel}>Color</Text>
+                  <View style={styles.compactPaletteRow}>
+                    {['#FFFFFF', '#FACC15', '#4ADE80', '#38BDF8'].map(c => (
+                      <TouchableOpacity 
+                        key={c} 
+                        onPress={() => setSubColor(c)} 
+                        style={[styles.colorBubble, { backgroundColor: c }, subColor === c && styles.colorBubbleActive]} 
+                      />
                     ))}
                   </View>
 
-                  <Text style={styles.subStyleLabel}>Size</Text>
-                  <View style={styles.pillGroup}>
-                    {[14, 16, 20, 24].map(s => (
-                      <TouchableOpacity key={s} onPress={() => setSubSize(s)} style={[styles.pillBtn, subSize === s && styles.pillBtnActive]}>
-                        <Text style={[styles.pillText, subSize === s && styles.pillTextActive]}>{s}px</Text>
+                  <Text style={styles.compactSectionLabel}>Size</Text>
+                  <View style={styles.switchGroupRow}>
+                    {[13, 15, 18, 22].map(s => (
+                      <TouchableOpacity 
+                        key={s} 
+                        onPress={() => setSubSize(s)} 
+                        style={[styles.compactPill, subSize === s && styles.compactPillActive]}
+                      >
+                        <Text style={[styles.compactPillText, subSize === s && styles.compactPillTextActive]}>{s}px</Text>
                       </TouchableOpacity>
                     ))}
                   </View>
@@ -737,37 +859,35 @@ export default function Player({ route, navigation }) {
               </View>
             )}
 
-            {/* SPEED SHEET */}
+            {/* PLAYBACK SPEED SHEET */}
             {activeMenu === 'speed' && (
-              <View style={styles.sheetContent}>
-                <View style={styles.sheetHeaderRow}>
-                  <Text style={styles.sheetHeaderTitle}>Playback Speed</Text>
-                  <TouchableOpacity onPress={closeSheet}><IconClose size={22} color="#888" /></TouchableOpacity>
+              <View style={styles.sheetInner}>
+                <View style={styles.sheetHeader}>
+                  <Text style={styles.sheetTitle}>Playback Speed</Text>
+                  <TouchableOpacity onPress={closeSheet}>
+                    <IconClose size={18} color="#AAA" />
+                  </TouchableOpacity>
                 </View>
-                <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 15 }}>
-                  <Text style={styles.speedDisplay}>{playbackSpeed.toFixed(2)}x</Text>
-                  <Slider
-                    style={styles.sheetSlider}
-                    minimumValue={0.25}
-                    maximumValue={2.0}
-                    step={0.25}
-                    value={playbackSpeed}
-                    minimumTrackTintColor={BRAND_RED}
-                    maximumTrackTintColor="rgba(255,255,255,0.2)"
-                    thumbTintColor="#FFF"
-                    onValueChange={(val) => {
-                      setPlaybackSpeed(val);
-                      videoRef.current?.setRateAsync(val, true);
-                    }}
-                  />
-                  <View style={styles.pillGroupScroll}>
-                    {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map(s => (
-                      <TouchableOpacity key={s} onPress={() => { setPlaybackSpeed(s); videoRef.current?.setRateAsync(s, true); }} style={[styles.pillBtn, playbackSpeed === s && styles.pillBtnActive]}>
-                        <Text style={[styles.pillText, playbackSpeed === s && styles.pillTextActive]}>{s.toFixed(2)}x</Text>
+                <View style={styles.speedGrid}>
+                  {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map(s => {
+                    const isSelected = playbackSpeed === s;
+                    return (
+                      <TouchableOpacity 
+                        key={s} 
+                        onPress={() => {
+                          setPlaybackSpeed(s);
+                          videoRef.current?.setRateAsync(s, true);
+                          closeSheet();
+                        }} 
+                        style={[styles.speedGridItem, isSelected && styles.speedGridItemActive]}
+                      >
+                        <Text style={[styles.speedGridText, isSelected && styles.speedGridTextActive]}>
+                          {s.toFixed(2)}x
+                        </Text>
                       </TouchableOpacity>
-                    ))}
-                  </View>
-                </ScrollView>
+                    );
+                  })}
+                </View>
               </View>
             )}
           </Animated.View>
@@ -783,86 +903,126 @@ const styles = StyleSheet.create({
 
   loaderContainerFull: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
   loaderText: { color: '#AAA', marginTop: 12, fontSize: 13, letterSpacing: 0.5 },
-  bufferingOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 4 },
+  bufferingOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 12 },
 
-  gestureToastContainer: { position: 'absolute', top: 30, alignSelf: 'center', backgroundColor: 'rgba(10,10,10,0.85)', paddingHorizontal: 18, paddingVertical: 8, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)', zIndex: 40 },
-  gestureToastText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
+  gestureToastContainer: { position: 'absolute', top: 25, alignSelf: 'center', backgroundColor: 'rgba(15,15,15,0.92)', paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)', zIndex: 40, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  gestureToastText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
 
   subtitleContainer: { position: 'absolute', width: '100%', alignItems: 'center', zIndex: 9, paddingHorizontal: 30 },
-  subtitleText: { fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4, backgroundColor: 'rgba(0,0,0,0.45)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6, maxWidth: '90%', lineHeight: 24 },
+  subtitleText: { fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4, backgroundColor: 'rgba(0,0,0,0.4)', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 4, maxWidth: '90%', lineHeight: 22 },
 
   uiLayer: { ...StyleSheet.absoluteFillObject, zIndex: 10, justifyContent: 'space-between' },
   
-  // MATCHING WEB UI: Top Bar
-  topBarWrapper: { width: '100%', position: 'absolute', top: 0, height: 120 },
-  topBarContent: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 24, paddingTop: 20 },
+  // Clean Top Bar
+  topBarWrapper: { width: '100%', position: 'absolute', top: 0, height: 110 },
+  topBarContent: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 22, paddingTop: 18 },
   topLeftGroup: { flexDirection: 'row', alignItems: 'flex-start' },
-  titleColumn: { marginLeft: 12, marginTop: 2, paddingHorizontal: 6, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 6, paddingVertical: 4 },
-  mainTitle: { color: '#FFF', fontSize: 17, fontWeight: '800', letterSpacing: 0.3, textShadowColor: '#000', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 },
-  subTitle: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontStyle: 'italic', marginTop: 2 },
-  topRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 20 },
+  titleColumnClean: { marginLeft: 12, marginTop: 1 }, // Background and padding removed
+  mainTitle: { color: '#FFF', fontSize: 16, fontWeight: '800', letterSpacing: 0.3, textShadowColor: '#000', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 },
+  subTitle: { color: 'rgba(255,255,255,0.7)', fontSize: 12, marginTop: 2 },
+  topRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 18 },
   iconBtn: { padding: 4 },
-  hdBtn: { borderWidth: 1.5, borderColor: '#FFF', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, justifyContent: 'center', alignItems: 'center' },
+  hdBtn: { borderWidth: 1.5, borderColor: '#FFF', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1, justifyContent: 'center', alignItems: 'center' },
   hdBtnText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
 
-  // MATCHING WEB UI: Center Controls
+  // Center Controls
   centerControls: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 55 },
-  playPauseBtn: { width: 72, height: 72, justifyContent: 'center', alignItems: 'center' },
-  iconBtnCenter: { padding: 10 },
+  playPauseBtn: { width: 68, height: 68, justifyContent: 'center', alignItems: 'center' },
+  iconBtnCenter: { padding: 8 },
 
-  // Double Tap Indicators
-  skipLeftInd: { position: 'absolute', left: '15%', top: '42%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.7)', padding: 20, borderRadius: 50, zIndex: 25 },
-  skipRightInd: { position: 'absolute', right: '15%', top: '42%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.7)', padding: 20, borderRadius: 50, zIndex: 25 },
-  skipText: { color: '#FFF', fontSize: 13, fontWeight: 'bold', marginTop: 6 },
+  // Double-tap Indicators
+  skipLeftInd: { position: 'absolute', left: '16%', top: '42%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.7)', padding: 18, borderRadius: 45, zIndex: 25 },
+  skipRightInd: { position: 'absolute', right: '16%', top: '42%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.7)', padding: 18, borderRadius: 45, zIndex: 25 },
+  skipText: { color: '#FFF', fontSize: 12, fontWeight: 'bold', marginTop: 4 },
 
-  // Intro Button
-  skipIntroFloat: { position: 'absolute', bottom: 95, right: 25, zIndex: 30 },
-  skipIntroBtnInner: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(20,20,20,0.85)', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)', gap: 8 },
-  skipIntroText: { color: '#FFF', fontWeight: 'bold', fontSize: 13, textTransform: 'uppercase', letterSpacing: 0.5 },
+  // Skip Intro
+  skipIntroFloat: { position: 'absolute', bottom: 85, right: 22, zIndex: 30 },
+  skipIntroBtnInner: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(20,20,20,0.9)', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)', gap: 6 },
+  skipIntroText: { color: '#FFF', fontWeight: 'bold', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
 
-  // MATCHING WEB UI: Bottom Area
-  bottomBarWrapper: { width: '100%', position: 'absolute', bottom: 0, height: 130, justifyContent: 'flex-end' },
-  bottomContent: { paddingHorizontal: 24, paddingBottom: 15 },
-  bottomToolsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  toolsLeft: { flexDirection: 'row', alignItems: 'center', gap: 24 },
-  speedBtnText: { color: '#FFF', fontSize: 14, fontWeight: '600', textShadowColor: '#000', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 },
+  // Bottom Area
+  bottomBarWrapper: { width: '100%', position: 'absolute', bottom: 0, height: 120, justifyContent: 'flex-end' },
+  bottomContent: { paddingHorizontal: 22, paddingBottom: 14 },
+  bottomToolsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  toolsLeft: { flexDirection: 'row', alignItems: 'center', gap: 20 },
+  aspectPillBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  aspectPillText: { color: '#FFF', fontSize: 12, fontWeight: '600' },
+  speedBtnText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
   
   progressRow: { flexDirection: 'row', alignItems: 'center' },
-  timeText: { color: '#FFF', fontSize: 12, fontFamily: 'monospace', textShadowColor: '#000', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2, minWidth: 45, textAlign: 'center' },
-  slider: { flex: 1, marginHorizontal: 12, height: 35 },
+  timeText: { color: '#FFF', fontSize: 11, fontFamily: 'monospace', minWidth: 42, textAlign: 'center' },
+  slider: { flex: 1, marginHorizontal: 8, height: 32 },
 
-  // MATCHING WEB UI: Bottom Sheet
-  bottomSheetSurface: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#121212', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 24, paddingBottom: 24, paddingTop: 20, maxHeight: SCREEN_HEIGHT * 0.85, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)', zIndex: 60 },
-  sheetContent: { width: '100%' },
-  sheetHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  sheetHeaderTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
-  
-  sheetItem: { paddingVertical: 16, paddingHorizontal: 16, backgroundColor: '#1E1E1E', borderRadius: 8, marginBottom: 8, borderWidth: 1, borderColor: 'transparent' },
-  sheetItemActive: { backgroundColor: '#FFF', borderColor: '#FFF' },
-  sheetItemText: { color: 'rgba(255,255,255,0.7)', fontSize: 15, fontWeight: '600' },
-  sheetItemTextActive: { color: '#000', fontWeight: 'bold' },
-  
-  sheetAddBtn: { backgroundColor: 'rgba(255,255,255,0.05)', paddingVertical: 16, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', alignItems: 'center', marginTop: 10 },
-  sheetAddBtnText: { color: '#FFF', fontSize: 15, fontWeight: 'bold' },
+  // COMPACT BOTTOM SHEET STYLING (RED & WHITE)
+  compactSheetSurface: {
+    position: 'absolute',
+    bottom: 0,
+    alignSelf: 'center',
+    width: Math.min(SCREEN_WIDTH * 0.75, 420),
+    backgroundColor: '#121212',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    maxHeight: 250,
+    zIndex: 60
+  },
+  sheetInner: { width: '100%' },
+  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.08)' },
+  sheetTitle: { color: '#FFF', fontSize: 14, fontWeight: 'bold' },
+  sheetListScroll: { paddingBottom: 6 },
 
-  // Sheet Sliders & Pills
-  speedDisplay: { color: '#FFF', fontSize: 24, fontWeight: 'bold', alignSelf: 'center', marginBottom: 15 },
-  sheetSlider: { width: '100%', height: 40, marginBottom: 20 },
-  pillGroupScroll: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center' },
-  pillGroup: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
-  pillBtn: { backgroundColor: 'transparent', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
-  pillBtnActive: { backgroundColor: '#FFF', borderColor: '#FFF' },
-  pillText: { color: 'rgba(255,255,255,0.7)', fontSize: 14, fontWeight: '600' },
-  pillTextActive: { color: '#000', fontWeight: 'bold' },
+  // Compact Rows
+  compactRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    marginBottom: 4,
+    backgroundColor: '#1C1C1C'
+  },
+  compactRowActive: {
+    backgroundColor: BRAND_RED // RED BACKGROUND
+  },
+  compactRowText: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 13,
+    fontWeight: '600'
+  },
+  compactRowTextActive: {
+    color: '#FFFFFF', // WHITE TEXT
+    fontWeight: 'bold'
+  },
 
-  subStyleLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: 'bold', marginTop: 15, marginBottom: 10, textTransform: 'uppercase' },
-  colorPalette: { flexDirection: 'row', gap: 12, marginBottom: 10 },
-  colorChip: { width: 30, height: 30, borderRadius: 15, borderWidth: 2, borderColor: 'transparent' },
-  colorChipActive: { borderColor: '#FFF' },
+  // Compact Pills & Switches
+  compactSectionLabel: { color: '#888', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase', marginTop: 8, marginBottom: 6 },
+  switchGroupRow: { flexDirection: 'row', gap: 8 },
+  compactPill: { flex: 1, paddingVertical: 7, borderRadius: 6, backgroundColor: '#1E1E1E', alignItems: 'center', justifyContent: 'center' },
+  compactPillActive: { backgroundColor: BRAND_RED },
+  compactPillText: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '600' },
+  compactPillTextActive: { color: '#FFFFFF', fontWeight: 'bold' },
 
-  errorContainer: { flex: 1, backgroundColor: '#050505', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
-  errorTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold', marginBottom: 6 },
-  errorSub: { color: BRAND_RED, fontSize: 12, textAlign: 'center', marginBottom: 20 },
-  errorBtn: { backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 6 },
+  // Palette
+  compactPaletteRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
+  colorBubble: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: 'transparent' },
+  colorBubbleActive: { borderColor: '#FFF' },
+
+  // Speed Grid
+  speedGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between' },
+  speedGridItem: { width: '31%', paddingVertical: 8, backgroundColor: '#1C1C1C', borderRadius: 6, alignItems: 'center' },
+  speedGridItemActive: { backgroundColor: BRAND_RED },
+  speedGridText: { color: 'rgba(255,255,255,0.7)', fontSize: 13, fontWeight: '600' },
+  speedGridTextActive: { color: '#FFFFFF', fontWeight: 'bold' },
+
+  // Error Card
+  errorContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
+  errorTitle: { color: '#FFF', fontSize: 17, fontWeight: 'bold', marginBottom: 4 },
+  errorSub: { color: BRAND_RED, fontSize: 12, textAlign: 'center', marginBottom: 16 },
+  errorBtn: { backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: 18, paddingVertical: 8, borderRadius: 6 },
   errorBtnText: { color: '#FFF', fontWeight: 'bold' }
 });
