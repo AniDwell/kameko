@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, Animated, 
-  Dimensions, ActivityIndicator, StatusBar, BackHandler,
-  TouchableWithoutFeedback, PanResponder
+  ActivityIndicator, StatusBar, BackHandler,
+  TouchableWithoutFeedback, PanResponder, useWindowDimensions,
+  ScrollView, Platform
 } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -10,19 +11,22 @@ import Slider from '@react-native-community/slider';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Path, Circle, Rect, Defs, LinearGradient, Stop } from 'react-native-svg';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+// --- CONFIGURATION CONSTANTS ---
 const BRAND_RED = '#E50914';
-const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
+const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
+const AUTO_HIDE_DELAY = 4500;
+const FALLBACK_OUTRO_SECONDS = 45;
 
 // --- IN-MEMORY CACHE ---
-const tmdbCache = {
-  seriesQueries: new Map(),    // normalizedTitle -> { tmdbId, details }
-  seasonMaps: new Map(),       // tmdbId -> [{ seasonNumber, episodeCount, totalPrior }]
-  episodeData: new Map()       // `tmdb_episode_${tmdbId}_${season}_${episode}` -> epMetadata
+const memoryCache = {
+  seriesQueries: new Map(),
+  seasonMaps: new Map(),
+  episodeData: new Map(),
+  parsedSubtitles: new Map()
 };
 
-// --- STRING MATCHING & NORMALIZATION ENGINE ---
+// --- STRING MATCHING HELPERS ---
 const cleanTitle = (str = '') => {
   return str
     .toLowerCase()
@@ -44,23 +48,91 @@ const calculateSimilarity = (s1, s2) => {
   const union = new Set([...words1, ...words2]);
   
   const jaccard = intersection.size / union.size;
-  const startsWithBonus = norm1.startsWith(norm2) || norm2.startsWith(norm1) ? 0.2 : 0;
-  return Math.min(1.0, jaccard + startsWithBonus);
+  const prefixBonus = norm1.startsWith(norm2) || norm2.startsWith(norm1) ? 0.2 : 0;
+  return Math.min(1.0, jaccard + prefixBonus);
 };
 
-// --- SVG ICONS ---
-const IconPlay = ({ size = 26, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>);
-const IconPause = ({ size = 26, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></Svg>);
-const IconBackward = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" /></Svg>);
-const IconForward = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" /></Svg>);
-const IconSettings = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Circle cx="12" cy="12" r="3"/><Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></Svg>);
-const IconSubs = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Rect x="3" y="5" width="18" height="14" rx="2" ry="2"/><Path d="M7 15h3m4 0h3M7 9h10"/></Svg>);
-const IconSkip = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M5 4l10 8-10 8V4z"/><Path d="M19 5v14"/></Svg>);
-const IconBack = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5"><Path d="M19 12H5M12 19l-7-7 7-7"/></Svg>);
+// --- PREMIUM SVG ICONS ---
+const IconPlay = ({ size = 28, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M8 5v14l11-7z" />
+  </Svg>
+);
+const IconPause = ({ size = 28, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+  </Svg>
+);
+const IconReplay10 = ({ size = 24, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8zm-1.5 6.5h-1V15h1v-3.5zm3.5 0h-2v3.5h2V11.5zm0 1v1.5h-1v-1.5h1z" />
+  </Svg>
+);
+const IconForward10 = ({ size = 24, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8zm-1.5 6.5h-1V15h1v-3.5zm3.5 0h-2v3.5h2V11.5zm0 1v1.5h-1v-1.5h1z" />
+  </Svg>
+);
+const IconSettings = ({ size = 22, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Circle cx="12" cy="12" r="3"/>
+    <Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
+  </Svg>
+);
+const IconSubtitles = ({ size = 22, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Rect x="2" y="4" width="20" height="16" rx="2" ry="2"/>
+    <Path d="M7 15h4M15 15h2M7 11h2M13 11h4"/>
+  </Svg>
+);
+const IconNextEp = ({ size = 22, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M5 4l10 8-10 8V4zM19 5v14"/>
+  </Svg>
+);
+const IconBackArrow = ({ size = 24, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M19 12H5M12 19l-7-7 7-7"/>
+  </Svg>
+);
+const IconCheck = ({ size = 16, color = BRAND_RED }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M20 6L9 17l-5-5"/>
+  </Svg>
+);
 
+// --- REUSABLE COMPONENT: ANIMATED PRESS SCALE BUTTON ---
+const PressableScale = ({ children, onPress, style, scaleTo = 0.92, disabled = false }) => {
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const handlePressIn = () => {
+    Animated.spring(scale, { toValue: scaleTo, useNativeDriver: true, speed: 50, bounciness: 0 }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 50, bounciness: 4 }).start();
+  };
+
+  return (
+    <TouchableWithoutFeedback 
+      onPress={onPress} 
+      onPressIn={handlePressIn} 
+      onPressOut={handlePressOut}
+      disabled={disabled}
+    >
+      <Animated.View style={[style, { transform: [{ scale }] }]}>
+        {children}
+      </Animated.View>
+    </TouchableWithoutFeedback>
+  );
+};
+
+// =========================================================================
+// MAIN PLAYER COMPONENT
+// =========================================================================
 export default function Player({ route, navigation }) {
   const { 
-    animeTitle = 'Unknown', 
+    animeTitle = 'Unknown Anime', 
     episodeNum = 1, 
     episodeTitle = '', 
     animeId = null,
@@ -68,119 +140,168 @@ export default function Player({ route, navigation }) {
     targetType = 'sub'
   } = route?.params || {};
 
-  const videoRef = useRef(null);
-  const uiOpacity = useRef(new Animated.Value(1)).current;
-  const infoOverlayOpacity = useRef(new Animated.Value(0)).current;
-  const skipIntroOpacity = useRef(new Animated.Value(0)).current;
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const isLandscape = windowWidth > windowHeight;
+  const panelWidth = Math.min(windowWidth * 0.72, 400);
 
+  // References
+  const videoRef = useRef(null);
+  const statusRef = useRef({});
+  const lastTapRef = useRef(0);
+  const tapTimeoutRef = useRef(null);
+  const hideControlsTimer = useRef(null);
+  const overlayTimerRef = useRef(null);
+  const introTimerRef = useRef(null);
+
+  // Core Playback State
   const [status, setStatus] = useState({});
   const [isReady, setIsReady] = useState(false);
   const [showUI, setShowUI] = useState(true);
-  const [resizeMode, setResizeMode] = useState(ResizeMode.CONTAIN);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [scrubPosition, setScrubPosition] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
-  const [showSkipIndicator, setShowSkipIndicator] = useState(null);
+  const [resizeMode, setResizeMode] = useState(ResizeMode.CONTAIN);
 
-  // Settings & Subs Styling
-  const [activeMenu, setActiveMenu] = useState(null);
+  // Animation Values
+  const uiOpacity = useRef(new Animated.Value(1)).current;
+  const metaOverlayOpacity = useRef(new Animated.Value(0)).current;
+  const drawerAnim = useRef(new Animated.Value(panelWidth)).current;
+  const skipButtonAnim = useRef(new Animated.Value(0)).current;
+  const nextCardAnim = useRef(new Animated.Value(0)).current;
+  const seekIndicatorAnim = useRef(new Animated.Value(0)).current;
+
+  // Drawer / Side Panel Navigation State
+  // Values: null | 'main' | 'quality' | 'audio' | 'subtitles' | 'subtitle_style'
+  const [activeDrawer, setActiveDrawer] = useState(null);
+
+  // Subtitle Styling State
   const [subColor, setSubColor] = useState('#FFFFFF');
   const [subSize, setSubSize] = useState(16);
-  const [subHeight, setSubHeight] = useState(30);
+  const [subElevation, setSubElevation] = useState(30);
+  const [subBgOpacity, setSubBgOpacity] = useState(0.45);
 
-  // Stream Resolution
+  // Networking, Stream & Server Fallback
   const [streamData, setStreamData] = useState(null);
   const [loadingStream, setLoadingStream] = useState(true);
   const [fatalError, setFatalError] = useState(null);
+  const [availableServers, setAvailableServers] = useState([]);
+  const [currentServerIndex, setCurrentServerIndex] = useState(0);
 
-  // TMDB Metadata State
-  const [metaLoading, setMetaLoading] = useState(true);
+  // Multi-Track Subtitles & Parser
+  const [subtitleTracks, setSubtitleTracks] = useState([]);
+  const [selectedSubTrackIndex, setSelectedSubTrackIndex] = useState(-1);
+  const [parsedCues, setParsedCues] = useState([]);
+  const [currentSubtitleText, setCurrentSubtitleText] = useState('');
+
+  // Seeking & Gesture Feedback
+  const [seekDelta, setSeekDelta] = useState(0);
+  const [seekDirection, setSeekDirection] = useState(null);
+  const [brightnessLevel, setBrightnessLevel] = useState(0); // 0 (bright) to 0.85 (dark)
+  const [volumeLevel, setVolumeLevel] = useState(1.0); // 0.0 to 2.0 (boosted)
+  const [toastMessage, setToastMessage] = useState(null);
+
+  // TMDB Metadata
   const [tmdbMeta, setTmdbMeta] = useState(null);
 
-  // Gestures
-  const [brightnessOverlay, setBrightnessOverlay] = useState(0); 
-  const [volume, setVolume] = useState(1.0); 
-  const [gestureText, setGestureText] = useState(null);
+  // Intro / Outro & Next Episode
+  const [introRegion, setIntroRegion] = useState({ start: 0, end: 0 });
+  const [outroRegion, setOutroRegion] = useState({ start: 0, end: 0 });
+  const [inIntro, setInIntro] = useState(false);
+  const [inOutro, setInOutro] = useState(false);
+  const [hasNextEpisode, setHasNextEpisode] = useState(false);
+  const [nextEpisodeDismissed, setNextEpisodeDismissed] = useState(false);
 
-  // Intro Skip & Subtitles
-  const [introData, setIntroData] = useState({ start: 0, end: 0 });
-  const [showSkipButton, setShowSkipButton] = useState(false);
-  const skipTimerRef = useRef(null);
-  const [parsedSubs, setParsedSubs] = useState([]);
-  const [currentSubText, setCurrentSubText] = useState('');
-  const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
+  // =========================================================================
+  // 1. ISOLATED NEXT EPISODE NAVIGATION HANDLER
+  // =========================================================================
+  const handleNextEpisode = useCallback(() => {
+    const nextEpNum = parseInt(episodeNum, 10) + 1;
+    // Replace with your app's explicit navigation route if different from 'Player'
+    if (navigation && typeof navigation.replace === 'function') {
+      navigation.replace('Player', {
+        animeTitle,
+        episodeNum: nextEpNum,
+        episodeTitle: `Episode ${nextEpNum}`,
+        animeId,
+        userUid,
+        targetType
+      });
+    } else if (navigation && typeof navigation.navigate === 'function') {
+      navigation.navigate('Player', {
+        animeTitle,
+        episodeNum: nextEpNum,
+        episodeTitle: `Episode ${nextEpNum}`,
+        animeId,
+        userUid,
+        targetType
+      });
+    }
+  }, [navigation, animeTitle, episodeNum, animeId, userUid, targetType]);
 
-  const hideUITimeout = useRef(null);
-  const overlayTimerRef = useRef(null);
-  const lastTapRef = useRef(0);
-
-  // --- 1. ORIENTATION & HARDWARE BACK ---
+  // =========================================================================
+  // 2. LIFECYCLE & ORIENTATION LOCK
+  // =========================================================================
   useEffect(() => {
-    async function lockOrientation() {
+    async function lockToLandscape() {
       try {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
       } catch (_) {}
-      StatusBar.setHidden(true);
+      StatusBar.setHidden(true, 'fade');
     }
-    lockOrientation();
+    lockToLandscape();
 
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleClosePlayer);
+    const handleHardwareBack = () => {
+      if (activeDrawer !== null) {
+        if (activeDrawer !== 'main') {
+          setActiveDrawer('main');
+        } else {
+          closeDrawer();
+        }
+        return true;
+      }
+      handleExitPlayer();
+      return true;
+    };
+
+    const backSubscription = BackHandler.addEventListener('hardwareBackPress', handleHardwareBack);
+
     return () => {
       ScreenOrientation.unlockAsync().catch(() => {});
-      StatusBar.setHidden(false);
-      backHandler.remove();
-      if (skipTimerRef.current) clearTimeout(skipTimerRef.current);
+      StatusBar.setHidden(false, 'fade');
+      backSubscription.remove();
+      if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
       if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
-      if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
+      if (introTimerRef.current) clearTimeout(introTimerRef.current);
+      if (tapTimeoutRef.current) clearTimeout(tapTimeoutRef.current);
     };
-  }, []);
+  }, [activeDrawer]);
 
-  const handleClosePlayer = async () => {
+  const handleExitPlayer = async () => {
     await ScreenOrientation.unlockAsync().catch(() => {});
     navigation.goBack();
-    return true;
   };
 
-  // --- 2. NETFLIX OVERLAY FADE LOGIC ---
-  const triggerNetflixOverlay = useCallback(() => {
-    if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
-    Animated.timing(infoOverlayOpacity, {
-      toValue: 1,
-      duration: 350,
-      useNativeDriver: true
-    }).start();
-
-    overlayTimerRef.current = setTimeout(() => {
-      Animated.timing(infoOverlayOpacity, {
-        toValue: 0,
-        duration: 500,
-        useNativeDriver: true
-      }).start();
-    }, 6000);
-  }, [infoOverlayOpacity]);
-
-  // --- 3. TMDB SEARCH, SCORING & SEASON MAPPING ENGINE ---
+  // =========================================================================
+  // 3. TMDB METADATA & SEASON-EPISODE MAPPING
+  // =========================================================================
   useEffect(() => {
     let isCancelled = false;
 
-    const fetchAndMapTMDB = async () => {
-      setMetaLoading(true);
-      setTmdbMeta(null); // Prevent stale state leak
+    const resolveTMDBMetadata = async () => {
+      setTmdbMeta(null);
 
       try {
-        const queryNorm = cleanTitle(animeTitle);
-        let seriesDetails = tmdbCache.seriesQueries.get(queryNorm);
+        const queryClean = cleanTitle(animeTitle);
+        let seriesDetails = memoryCache.seriesQueries.get(queryClean);
 
         if (!seriesDetails) {
-          const searchUrl = `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(animeTitle)}&include_adult=false`;
-          const sRes = await fetch(searchUrl);
-          const sJson = await sRes.json();
-          const results = sJson?.results || [];
+          const searchEndpoint = `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(animeTitle)}&include_adult=false`;
+          const res = await fetch(searchEndpoint);
+          const data = await res.json();
+          const results = data?.results || [];
 
-          if (results.length === 0) {
-            setMetaLoading(false);
-            return;
-          }
+          if (results.length === 0) return;
 
-          // Score results by similarity across English, Original, and Alternative titles
           let bestMatch = null;
           let highestScore = -1;
 
@@ -195,380 +316,614 @@ export default function Player({ route, navigation }) {
             }
           }
 
-          if (!bestMatch || highestScore < 0.25) {
-            setMetaLoading(false);
-            return;
-          }
+          if (!bestMatch || highestScore < 0.22) return;
 
-          // Fetch full series info with ratings
-          const detailUrl = `https://api.themoviedb.org/3/tv/${bestMatch.id}?api_key=${TMDB_API_KEY}&append_to_response=content_ratings,alternative_titles`;
-          const dRes = await fetch(detailUrl);
+          const detailsUrl = `https://api.themoviedb.org/3/tv/${bestMatch.id}?api_key=${TMDB_API_KEY}&append_to_response=content_ratings,alternative_titles`;
+          const dRes = await fetch(detailsUrl);
           seriesDetails = await dRes.json();
-          tmdbCache.seriesQueries.set(queryNorm, seriesDetails);
+          memoryCache.seriesQueries.set(queryClean, seriesDetails);
         }
 
         if (isCancelled || !seriesDetails?.id) return;
 
-        // Build season distribution map (filtering out Season 0 specials)
-        let seasonDistribution = tmdbCache.seasonMaps.get(seriesDetails.id);
-        if (!seasonDistribution) {
-          const validSeasons = (seriesDetails.seasons || [])
+        // Cumulative season breakdown
+        let seasonsMap = memoryCache.seasonMaps.get(seriesDetails.id);
+        if (!seasonsMap) {
+          const canonicalSeasons = (seriesDetails.seasons || [])
             .filter(s => s.season_number > 0)
             .sort((a, b) => a.season_number - b.season_number);
 
-          let totalAcc = 0;
-          seasonDistribution = validSeasons.map(s => {
-            const entry = {
+          let accumulatedCount = 0;
+          seasonsMap = canonicalSeasons.map(s => {
+            const record = {
               seasonNumber: s.season_number,
               episodeCount: s.episode_count || 0,
-              priorTotal: totalAcc
+              priorTotal: accumulatedCount
             };
-            totalAcc += (s.episode_count || 0);
-            return entry;
+            accumulatedCount += (s.episode_count || 0);
+            return record;
           });
-          tmdbCache.seasonMaps.set(seriesDetails.id, seasonDistribution);
+          memoryCache.seasonMaps.set(seriesDetails.id, seasonsMap);
         }
 
-        // Map global AniList episode number to TMDB { season, episode }
         const globalEp = parseInt(episodeNum, 10) || 1;
         let matchedSeason = 1;
         let matchedEpisode = globalEp;
-        let foundInMap = false;
+        let mappingSuccess = false;
 
-        for (const s of seasonDistribution) {
+        for (const s of seasonsMap) {
           if (globalEp > s.priorTotal && globalEp <= (s.priorTotal + s.episodeCount)) {
             matchedSeason = s.seasonNumber;
             matchedEpisode = globalEp - s.priorTotal;
-            foundInMap = true;
+            mappingSuccess = true;
             break;
           }
         }
 
-        // If AniList count overflows TMDB series (e.g. Sequel indexed separately on TMDB)
-        if (!foundInMap && seasonDistribution.length > 0) {
-          const lastSeason = seasonDistribution[seasonDistribution.length - 1];
-          matchedSeason = lastSeason.seasonNumber;
-          matchedEpisode = Math.max(1, globalEp - lastSeason.priorTotal);
+        if (!mappingSuccess && seasonsMap.length > 0) {
+          const finalS = seasonsMap[seasonsMap.length - 1];
+          matchedSeason = finalS.seasonNumber;
+          matchedEpisode = Math.max(1, globalEp - finalS.priorTotal);
         }
 
-        // Fetch Episode Specific Metadata
-        const epCacheKey = `tmdb_episode_${seriesDetails.id}_${matchedSeason}_${matchedEpisode}`;
-        let episodeInfo = tmdbCache.episodeData.get(epCacheKey);
+        // Check if next episode exists in TMDB
+        const totalIndexedEps = seasonsMap.reduce((acc, curr) => acc + curr.episodeCount, 0);
+        if (globalEp < totalIndexedEps) {
+          setHasNextEpisode(true);
+        }
 
-        if (!episodeInfo) {
+        // Fetch episode specific entry
+        const epCacheKey = `tmdb_episode_${seriesDetails.id}_${matchedSeason}_${matchedEpisode}`;
+        let epInfo = memoryCache.episodeData.get(epCacheKey);
+
+        if (!epInfo) {
           const epUrl = `https://api.themoviedb.org/3/tv/${seriesDetails.id}/season/${matchedSeason}/episode/${matchedEpisode}?api_key=${TMDB_API_KEY}`;
           const epRes = await fetch(epUrl);
           if (epRes.ok) {
-            episodeInfo = await epRes.json();
-            tmdbCache.episodeData.set(epCacheKey, episodeInfo);
+            epInfo = await epRes.json();
+            memoryCache.episodeData.set(epCacheKey, epInfo);
           }
         }
 
         if (isCancelled) return;
 
-        // Content Rating calculation
         const ratings = seriesDetails.content_ratings?.results || [];
-        const inRating = ratings.find(r => r.iso_3166_1 === 'IN')?.rating;
-        const usRating = ratings.find(r => r.iso_3166_1 === 'US')?.rating;
-        const fallbackRating = ratings[0]?.rating || null;
-        const certification = inRating || usRating || fallbackRating;
+        const cert = ratings.find(r => r.iso_3166_1 === 'IN')?.rating ||
+                     ratings.find(r => r.iso_3166_1 === 'US')?.rating ||
+                     ratings[0]?.rating || null;
 
-        // Series Genres
         const genres = (seriesDetails.genres || []).map(g => g.name).slice(0, 3).join(' • ');
 
         setTmdbMeta({
           seasonNumber: matchedSeason,
           episodeNumber: matchedEpisode,
-          title: episodeInfo?.name || episodeTitle || `Episode ${episodeNum}`,
-          overview: episodeInfo?.overview || seriesDetails.overview || '',
-          stillPath: episodeInfo?.still_path ? `https://image.tmdb.org/t/p/w500${episodeInfo.still_path}` : null,
-          certification,
+          title: epInfo?.name || episodeTitle || `Episode ${episodeNum}`,
+          overview: epInfo?.overview || seriesDetails.overview || '',
+          certification: cert,
           genres
         });
-        triggerNetflixOverlay();
-      } catch (err) {
-        // Resilient fallback: playback proceeds smoothly on network/API failure
-      } finally {
-        if (!isCancelled) setMetaLoading(false);
+
+        triggerNetflixMetadataBanner();
+      } catch (_) {
+        // Non-blocking catch
       }
     };
 
-    fetchAndMapTMDB();
+    resolveTMDBMetadata();
     return () => { isCancelled = true; };
-  }, [animeTitle, episodeNum, triggerNetflixOverlay]);
+  }, [animeTitle, episodeNum]);
 
-  // --- 4. STREAM RESOLUTION ENGINE ---
+  // =========================================================================
+  // 4. STREAM RESOLUTION & RECOVERY ENGINE
+  // =========================================================================
+  const resolveCurrentStream = useCallback(async (serverList, startIndex = 0) => {
+    setLoadingStream(true);
+    setFatalError(null);
+
+    let chosenData = null;
+    let activeIdx = startIndex;
+
+    for (let i = startIndex; i < serverList.length; i++) {
+      const srv = serverList[i];
+      try {
+        const url = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}&server=${srv}&type=${targetType}`;
+        const res = await fetch(url);
+        const json = await res.json();
+        if (json?.success && json?.data?.m3u8) {
+          chosenData = json.data;
+          activeIdx = i;
+          break;
+        }
+      } catch (_) {}
+    }
+
+    if (!chosenData) {
+      setFatalError('Unable to connect to streaming servers. Please verify connection or try again.');
+      setLoadingStream(false);
+      return;
+    }
+
+    // Set intro/outro
+    if (chosenData.intro) {
+      setIntroRegion({ start: chosenData.intro.start || 0, end: chosenData.intro.end || 0 });
+    }
+    if (chosenData.outro) {
+      setOutroRegion({ start: chosenData.outro.start || 0, end: chosenData.outro.end || 0 });
+    }
+
+    // Initialize subtitles list
+    const subs = chosenData.subtitles || [];
+    setSubtitleTracks(subs);
+    if (subs.length > 0) {
+      const defaultIdx = subs.findIndex(s => s.default) !== -1 ? subs.findIndex(s => s.default) : 0;
+      setSelectedSubTrackIndex(defaultIdx);
+    } else {
+      setSelectedSubTrackIndex(-1);
+    }
+
+    setCurrentServerIndex(activeIdx);
+    setStreamData(chosenData);
+    setLoadingStream(false);
+  }, [animeId, episodeNum, targetType]);
+
   useEffect(() => {
     let isMounted = true;
 
-    const resolveStream = async () => {
-      let typeServers = ['hd-1', 'hd-2', 'vidstream-2'];
+    const bootstrapStream = async () => {
+      let candidateServers = ['hd-1', 'hd-2', 'vidstream-2'];
       try {
         const srvRes = await fetch(`${VERCEL_API_BASE}/api/servers?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}`);
         const srvJson = await srvRes.json();
-        if (srvJson?.success && srvJson?.data) {
+        if (srvJson?.success && Array.isArray(srvJson.data)) {
           const filtered = srvJson.data.filter(s => s.type === targetType).map(s => s.serverName);
-          if (filtered.length > 0) typeServers = filtered;
+          if (filtered.length > 0) candidateServers = filtered;
         }
       } catch (_) {}
 
-      let finalStreamData = null;
-      for (const srv of typeServers) {
-        try {
-          const url = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}&server=${srv}&type=${targetType}`;
-          const res = await fetch(url);
-          const json = await res.json();
-          if (json?.success && json?.data?.m3u8) {
-            finalStreamData = json.data;
-            break;
-          }
-        } catch (_) {}
+      if (isMounted) {
+        setAvailableServers(candidateServers);
+        resolveCurrentStream(candidateServers, 0);
       }
-
-      if (!isMounted) return;
-
-      if (!finalStreamData) {
-        setFatalError(`All servers are currently unresponsive for Episode ${episodeNum} (${targetType.toUpperCase()}).`);
-        setLoadingStream(false);
-        return;
-      }
-
-      if (finalStreamData.intro) setIntroData(finalStreamData.intro);
-      setStreamData(finalStreamData);
-      setLoadingStream(false);
     };
 
-    resolveStream();
+    bootstrapStream();
     return () => { isMounted = false; };
-  }, [animeId, episodeNum, targetType]);
+  }, [animeId, episodeNum, targetType, resolveCurrentStream]);
 
-  // --- 5. VTT SUBTITLE PARSER ---
+  // =========================================================================
+  // 5. WEBVTT SUBTITLE ENGINE (BINARY SEARCH LOOKUP)
+  // =========================================================================
   useEffect(() => {
-    if (!streamData?.subtitles || streamData.subtitles.length === 0) return;
+    if (selectedSubTrackIndex < 0 || !subtitleTracks[selectedSubTrackIndex]) {
+      setParsedCues([]);
+      setCurrentSubtitleText('');
+      return;
+    }
 
-    const loadSubtitles = async () => {
+    const track = subtitleTracks[selectedSubTrackIndex];
+    const fileUrl = track.file;
+    if (!fileUrl) return;
+
+    if (memoryCache.parsedSubtitles.has(fileUrl)) {
+      setParsedCues(memoryCache.parsedSubtitles.get(fileUrl));
+      return;
+    }
+
+    let isAborted = false;
+
+    const fetchAndParseVTT = async () => {
       try {
-        const response = await fetch(streamData.subtitles[0].file);
-        if (!response.ok) return;
-        const vttText = await response.text();
+        const res = await fetch(fileUrl);
+        if (!res.ok) return;
+        const rawText = await res.text();
+        if (isAborted) return;
+
         const cues = [];
-        const blocks = vttText.split(/\r?\n\r?\n/);
+        const blocks = rawText.split(/\r?\n\r?\n/);
+
+        const parseTimestamp = (ts) => {
+          if (!ts) return 0;
+          const cleanTs = ts.trim().replace(',', '.');
+          const parts = cleanTs.split(':');
+          let s = 0;
+          if (parts.length === 3) {
+            s = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2]);
+          } else if (parts.length === 2) {
+            s = parseInt(parts[0], 10) * 60 + parseFloat(parts[1]);
+          }
+          return Math.round(s * 1000);
+        };
 
         for (const block of blocks) {
           const lines = block.split(/\r?\n/);
-          const timeLine = lines.find(l => l.includes('-->'));
-          if (!timeLine) continue;
+          const timeIndex = lines.findIndex(l => l.includes('-->'));
+          if (timeIndex === -1) continue;
 
-          const [startStr, endStr] = timeLine.split('-->').map(s => s.trim());
-          const parseTime = (ts) => {
-            if (!ts) return 0;
-            const parts = ts.split(':');
-            let s = 0;
-            if (parts.length === 3) s = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2].replace(',', '.'));
-            else s = parseInt(parts[0], 10) * 60 + parseFloat(parts[1].replace(',', '.'));
-            return s * 1000;
-          };
+          const [startRaw, endRaw] = lines[timeIndex].split('-->');
+          if (!startRaw || !endRaw) continue;
 
-          const textLines = lines.slice(lines.indexOf(timeLine) + 1).filter(l => !l.startsWith('WEBVTT') && l.trim() !== '');
-          const clean = textLines.join('\n').replace(/<[^>]+>/g, '');
-          cues.push({ startMs: parseTime(startStr), endMs: parseTime(endStr), text: clean });
+          const startMs = parseTimestamp(startRaw);
+          const endMs = parseTimestamp(endRaw.trim().split(' ')[0]);
+
+          const textPayload = lines.slice(timeIndex + 1)
+            .filter(l => !l.startsWith('WEBVTT') && !l.startsWith('NOTE') && l.trim() !== '')
+            .join('\n')
+            .replace(/<[^>]+>/g, '')
+            .trim();
+
+          if (textPayload) {
+            cues.push({ startMs, endMs, text: textPayload });
+          }
         }
-        setParsedSubs(cues);
+
+        // Sort monotonically by startMs
+        cues.sort((a, b) => a.startMs - b.startMs);
+        memoryCache.parsedSubtitles.set(fileUrl, cues);
+        if (!isAborted) setParsedCues(cues);
       } catch (_) {}
     };
 
-    loadSubtitles();
-  }, [streamData]);
+    fetchAndParseVTT();
+    return () => { isAborted = true; };
+  }, [selectedSubTrackIndex, subtitleTracks]);
 
-  // --- 6. TICK (SUBS, SKIP INTRO, SYNC) ---
-  useEffect(() => {
-    if (!status.isLoaded) return;
-    const currentMs = status.positionMillis || 0;
-    const currentSecs = Math.floor(currentMs / 1000);
+  // Binary search lookup for high-frequency subtitle syncing
+  const getActiveSubtitleAtTime = useCallback((currMs) => {
+    if (!parsedCues || parsedCues.length === 0) return '';
 
-    if (subtitlesEnabled && parsedSubs.length > 0) {
-      const activeCue = parsedSubs.find(c => currentMs >= c.startMs && currentMs <= c.endMs);
-      if (activeCue && activeCue.text !== currentSubText) setCurrentSubText(activeCue.text);
-      else if (!activeCue && currentSubText !== '') setCurrentSubText('');
-    } else if (currentSubText !== '') {
-      setCurrentSubText('');
-    }
+    let low = 0;
+    let high = parsedCues.length - 1;
+    let index = -1;
 
-    if (introData.end > 0 && currentSecs >= introData.start && currentSecs < introData.end) {
-      if (!showSkipButton && !skipTimerRef.current) {
-        setShowSkipButton(true);
-        Animated.timing(skipIntroOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
-        skipTimerRef.current = setTimeout(() => {
-          Animated.timing(skipIntroOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
-            setShowSkipButton(false);
-          });
-        }, 6000);
-      }
-    } else if (showSkipButton) {
-      Animated.timing(skipIntroOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setShowSkipButton(false));
-      if (skipTimerRef.current) {
-        clearTimeout(skipTimerRef.current);
-        skipTimerRef.current = null;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (parsedCues[mid].startMs <= currMs) {
+        index = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
       }
     }
 
-    const durationSecs = Math.floor((status.durationMillis || 1) / 1000);
-    if (userUid && animeId && status.isPlaying && currentSecs > 0 && currentSecs % 10 === 0) {
-      const isCompleted = currentSecs > (durationSecs * 0.85);
-      firestore().collection('users').doc(userUid).collection('progress').doc(String(animeId)).set({
-        animeId: String(animeId),
-        lastWatchedEp: episodeNum,
-        progress: currentSecs,
-        duration: durationSecs,
-        finishedEp: isCompleted,
-        timestamp: Date.now()
-      }, { merge: true }).catch(() => {});
+    if (index === -1) return '';
+
+    // Search back up to 25 seconds for overlapping/long-duration cues
+    const activeTexts = [];
+    const minLookback = currMs - 25000;
+
+    for (let i = index; i >= 0; i--) {
+      const cue = parsedCues[i];
+      if (cue.startMs < minLookback) break;
+      if (currMs >= cue.startMs && currMs <= cue.endMs) {
+        activeTexts.unshift(cue.text);
+      }
     }
-  }, [status.positionMillis, subtitlesEnabled]);
 
-  // --- 7. SWIPE GESTURES ---
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 15,
-      onPanResponderMove: (_, gestureState) => {
-        const { moveX, dy } = gestureState;
-        const isLeft = moveX < Dimensions.get('window').width / 2;
+    return activeTexts.join('\n');
+  }, [parsedCues]);
 
-        if (isLeft) {
-          setBrightnessOverlay(prev => {
-            let next = prev + (dy * 0.003);
-            next = Math.max(0, Math.min(next, 0.85));
-            setGestureText(`Brightness ${Math.round((1 - next) * 100)}%`);
-            return next;
-          });
-        } else {
-          setVolume(prev => {
-            let next = prev - (dy * 0.005);
-            next = Math.max(0, Math.min(next, 2.0));
-            if (videoRef.current) videoRef.current.setVolumeAsync(Math.min(next, 1.0));
-            setGestureText(`Volume ${Math.round(next * 100)}%`);
-            return next;
-          });
-        }
-      },
-      onPanResponderRelease: () => setTimeout(() => setGestureText(null), 1000)
-    })
-  ).current;
+  // =========================================================================
+  // 6. ANIMATION & OVERLAY DRIVERS
+  // =========================================================================
+  const triggerNetflixMetadataBanner = useCallback(() => {
+    if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+    Animated.timing(metaOverlayOpacity, {
+      toValue: 1,
+      duration: 350,
+      useNativeDriver: true
+    }).start();
 
-  // --- 8. UI VISIBILITY ENGINE ---
-  const showControls = () => {
+    overlayTimerRef.current = setTimeout(() => {
+      Animated.timing(metaOverlayOpacity, {
+        toValue: 0,
+        duration: 600,
+        useNativeDriver: true
+      }).start();
+    }, 5500);
+  }, [metaOverlayOpacity]);
+
+  const openDrawer = (panelType) => {
+    setActiveDrawer(panelType);
+    Animated.spring(drawerAnim, {
+      toValue: 0,
+      useNativeDriver: true,
+      bounciness: 0,
+      speed: 18
+    }).start();
+  };
+
+  const closeDrawer = () => {
+    Animated.timing(drawerAnim, {
+      toValue: panelWidth,
+      duration: 250,
+      useNativeDriver: true
+    }).start(() => setActiveDrawer(null));
+  };
+
+  const showControls = useCallback(() => {
     setShowUI(true);
-    Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
-    triggerNetflixOverlay();
+    Animated.timing(uiOpacity, {
+      toValue: 1,
+      duration: 220,
+      useNativeDriver: true
+    }).start();
     resetHideTimer();
-  };
+  }, [uiOpacity]);
 
-  const hideControls = () => {
-    if (activeMenu) setActiveMenu(null);
-    Animated.timing(uiOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setShowUI(false));
-  };
+  const hideControls = useCallback(() => {
+    if (activeDrawer !== null || isScrubbing) return;
+    Animated.timing(uiOpacity, {
+      toValue: 0,
+      duration: 350,
+      useNativeDriver: true
+    }).start(() => setShowUI(false));
+  }, [uiOpacity, activeDrawer, isScrubbing]);
 
-  const toggleControls = () => {
+  const toggleControls = useCallback(() => {
     if (showUI) hideControls();
     else showControls();
-  };
+  }, [showUI, hideControls, showControls]);
 
-  const resetHideTimer = () => {
-    if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
-    hideUITimeout.current = setTimeout(() => {
-      if (status.isPlaying && !activeMenu) {
+  const resetHideTimer = useCallback(() => {
+    if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
+    hideControlsTimer.current = setTimeout(() => {
+      if (statusRef.current?.isPlaying && activeDrawer === null && !isScrubbing) {
         hideControls();
       }
-    }, 4500);
-  };
+    }, AUTO_HIDE_DELAY);
+  }, [activeDrawer, isScrubbing, hideControls]);
 
-  const handleTouchOverlay = (evt) => {
-    const now = Date.now();
-    const tapDelay = now - lastTapRef.current;
-    lastTapRef.current = now;
+  // =========================================================================
+  // 7. PLAYBACK STATUS & TICK ENGINE
+  // =========================================================================
+  const onPlaybackStatusUpdate = (playbackStatus) => {
+    statusRef.current = playbackStatus;
+    setStatus(playbackStatus);
 
-    if (tapDelay < 300) {
-      if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
-      const touchX = evt.nativeEvent.locationX;
-      if (touchX > Dimensions.get('window').width / 2) {
-        seekForward();
-        triggerSkipIndicator('right');
-      } else {
-        seekBackward();
-        triggerSkipIndicator('left');
+    if (playbackStatus.isLoaded) {
+      if (!isReady) setIsReady(true);
+
+      const posMs = playbackStatus.positionMillis || 0;
+      const durMs = playbackStatus.durationMillis || 1;
+      const currSec = Math.floor(posMs / 1000);
+      const durSec = Math.floor(durMs / 1000);
+
+      // Subtitle Sync
+      if (selectedSubTrackIndex >= 0) {
+        const text = getActiveSubtitleAtTime(posMs);
+        if (text !== currentSubtitleText) {
+          setCurrentSubtitleText(text);
+        }
       }
-    } else {
-      toggleControls();
+
+      // Intro Region Trigger
+      if (introRegion.end > 0 && currSec >= introRegion.start && currSec < introRegion.end) {
+        if (!inIntro) {
+          setInIntro(true);
+          Animated.spring(skipButtonAnim, { toValue: 1, useNativeDriver: true }).start();
+        }
+      } else if (inIntro) {
+        setInIntro(false);
+        Animated.timing(skipButtonAnim, { toValue: 0, duration: 300, useNativeDriver: true }).start();
+      }
+
+      // Outro Region Trigger
+      const computedOutroStart = outroRegion.start > 0 ? outroRegion.start : (durSec > 90 ? durSec - FALLBACK_OUTRO_SECONDS : -1);
+      if (computedOutroStart > 0 && currSec >= computedOutroStart) {
+        if (!inOutro) {
+          setInOutro(true);
+          if (hasNextEpisode && !nextEpisodeDismissed) {
+            Animated.spring(nextCardAnim, { toValue: 1, useNativeDriver: true }).start();
+          }
+        }
+      } else if (inOutro) {
+        setInOutro(false);
+      }
+
+      // Firestore Watched Progress Sync
+      if (userUid && animeId && playbackStatus.isPlaying && currSec > 0 && currSec % 10 === 0) {
+        const finished = currSec > durSec * 0.88;
+        firestore().collection('users').doc(userUid).collection('progress').doc(String(animeId)).set({
+          animeId: String(animeId),
+          lastWatchedEp: episodeNum,
+          progress: currSec,
+          duration: durSec,
+          finishedEp: finished,
+          timestamp: Date.now()
+        }, { merge: true }).catch(() => {});
+      }
     }
   };
 
-  const triggerSkipIndicator = (direction) => {
-    setShowSkipIndicator(direction);
-    setTimeout(() => setShowSkipIndicator(null), 600);
+  // =========================================================================
+  // 8. DOUBLE-TAP SEEK ACCUMULATION
+  // =========================================================================
+  const handleSeekDelta = (deltaSec) => {
+    if (!videoRef.current || !statusRef.current?.isLoaded) return;
+
+    const currentPosition = statusRef.current.positionMillis || 0;
+    const duration = statusRef.current.durationMillis || 0;
+    const target = Math.max(0, Math.min(duration, currentPosition + (deltaSec * 1000)));
+
+    videoRef.current.setPositionAsync(target);
+    resetHideTimer();
   };
 
-  // --- PLAYBACK DISPATCHERS ---
+  const handleDoubleTap = (side) => {
+    const isForward = side === 'right';
+    const increment = isForward ? 10 : -10;
+
+    setSeekDirection(isForward ? 'forward' : 'backward');
+    setSeekDelta(prev => (prev === 0 || (isForward && prev < 0) || (!isForward && prev > 0)) ? increment : prev + increment);
+
+    Animated.sequence([
+      Animated.timing(seekIndicatorAnim, { toValue: 1, duration: 150, useNativeDriver: true }),
+      Animated.delay(650),
+      Animated.timing(seekIndicatorAnim, { toValue: 0, duration: 250, useNativeDriver: true })
+    ]).start(() => setSeekDelta(0));
+
+    handleSeekDelta(increment);
+  };
+
+  // =========================================================================
+  // 9. DUAL-ZONE SWIPE GESTURES (BRIGHTNESS / VOLUME)
+  // =========================================================================
+  const panResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 18 && Math.abs(g.dx) < 22,
+    onPanResponderMove: (_, g) => {
+      const isLeft = g.moveX < windowWidth / 2;
+      if (isLeft) {
+        // Brightness dimming
+        setBrightnessLevel(prev => {
+          const next = Math.max(0, Math.min(0.85, prev + (g.dy * 0.0035)));
+          setToastMessage(`Brightness: ${Math.round((1 - next) * 100)}%`);
+          return next;
+        });
+      } else {
+        // Volume adjustment (0% to 200%)
+        setVolumeLevel(prev => {
+          const next = Math.max(0, Math.min(2.0, prev - (g.dy * 0.005)));
+          if (videoRef.current) {
+            videoRef.current.setVolumeAsync(Math.min(next, 1.0));
+          }
+          setToastMessage(`Volume: ${Math.round(next * 100)}%`);
+          return next;
+        });
+      }
+    },
+    onPanResponderRelease: () => {
+      setTimeout(() => setToastMessage(null), 1200);
+    }
+  }), [windowWidth]);
+
+  // Handle single and double tap delegation
+  const handleTouchZone = (evt) => {
+    if (activeDrawer !== null) {
+      closeDrawer();
+      return;
+    }
+
+    const now = Date.now();
+    const touchX = evt.nativeEvent.locationX;
+    const isDoubleTap = now - lastTapRef.current < 280;
+    lastTapRef.current = now;
+
+    if (isDoubleTap) {
+      if (tapTimeoutRef.current) clearTimeout(tapTimeoutRef.current);
+      if (touchX < windowWidth * 0.35) {
+        handleDoubleTap('left');
+      } else if (touchX > windowWidth * 0.65) {
+        handleDoubleTap('right');
+      } else {
+        toggleControls();
+      }
+    } else {
+      tapTimeoutRef.current = setTimeout(() => {
+        toggleControls();
+      }, 290);
+    }
+  };
+
+  // =========================================================================
+  // 10. SEEK TIMELINE & BUTTON HANDLERS
+  // =========================================================================
   const togglePlayPause = () => {
     if (!videoRef.current) return;
-    status.isPlaying ? videoRef.current.pauseAsync() : videoRef.current.playAsync();
+    if (status.isPlaying) {
+      videoRef.current.pauseAsync();
+    } else {
+      videoRef.current.playAsync();
+    }
     resetHideTimer();
   };
 
-  const seekBackward = async () => {
-    if (!videoRef.current || !status.isLoaded) return;
-    await videoRef.current.setPositionAsync(Math.max(0, status.positionMillis - 10000));
+  const handleSlidingStart = () => {
+    setIsScrubbing(true);
+    if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
+  };
+
+  const handleSliderValueChange = (val) => {
+    setScrubPosition(val);
+  };
+
+  const handleSlidingComplete = async (val) => {
+    if (videoRef.current) {
+      await videoRef.current.setPositionAsync(val);
+    }
+    setIsScrubbing(false);
     resetHideTimer();
   };
 
-  const seekForward = async () => {
-    if (!videoRef.current || !status.isLoaded) return;
-    await videoRef.current.setPositionAsync(Math.min(status.durationMillis, status.positionMillis + 10000));
-    resetHideTimer();
-  };
-
-  const handleSliderChange = async (val) => {
-    if (!videoRef.current || !status.isLoaded) return;
-    await videoRef.current.setPositionAsync(val);
-    resetHideTimer();
-  };
-
-  const formatTime = (millis) => {
-    if (isNaN(millis)) return "00:00";
+  const formatTimestamp = (millis) => {
+    if (!millis || isNaN(millis)) return "00:00";
     const totalSecs = Math.floor(millis / 1000);
-    const h = Math.floor(totalSecs / 3600);
-    const m = Math.floor((totalSecs % 3600) / 60).toString().padStart(2, '0');
-    const s = (totalSecs % 60).toString().padStart(2, '0');
-    return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
+    const hrs = Math.floor(totalSecs / 3600);
+    const mins = Math.floor((totalSecs % 3600) / 60);
+    const secs = totalSecs % 60;
+    if (hrs > 0) {
+      return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // =========================================================================
+  // 11. SUBTITLE VERTICAL OFFSET CALCULATION
+  // =========================================================================
+  const computedSubtitleBottom = useMemo(() => {
+    let offset = subElevation;
+    if (showUI) offset += 72; // Move up to avoid bottom timeline
+    if (inIntro || (inOutro && hasNextEpisode && !nextEpisodeDismissed)) offset += 45; // Move up to avoid cards
+    return offset;
+  }, [subElevation, showUI, inIntro, inOutro, hasNextEpisode, nextEpisodeDismissed]);
+
+  // =========================================================================
+  // 12. RENDER: LOADERS & FATAL ERRORS
+  // =========================================================================
   if (loadingStream) {
     return (
-      <View style={styles.loaderContainerFull}>
+      <View style={styles.blackBackgroundCenter}>
         <ActivityIndicator size="large" color="#FFFFFF" />
-        <Text style={styles.loaderText}>Connecting to stream...</Text>
+        <Text style={styles.loadingStreamText}>Connecting to secure stream...</Text>
       </View>
     );
   }
 
   if (fatalError || !streamData) {
     return (
-      <View style={styles.errorContainer}>
-        <Text style={styles.errorTitle}>Playback Halted</Text>
-        <Text style={styles.errorSub}>{fatalError || "Unable to play stream."}</Text>
-        <TouchableOpacity style={styles.errorBtn} onPress={handleClosePlayer}>
-          <Text style={styles.errorBtnText}>Go Back</Text>
-        </TouchableOpacity>
+      <View style={styles.blackBackgroundCenter}>
+        <Text style={styles.errorHeader}>Unable to play this episode</Text>
+        <Text style={styles.errorSub}>{fatalError || "A network or server issue prevented playback."}</Text>
+        <View style={styles.errorButtonsRow}>
+          <PressableScale 
+            style={styles.errorActionButton} 
+            onPress={() => resolveCurrentStream(availableServers, (currentServerIndex + 1) % availableServers.length)}
+          >
+            <Text style={styles.errorActionText}>Change Server</Text>
+          </PressableScale>
+          <PressableScale 
+            style={[styles.errorActionButton, { backgroundColor: BRAND_RED }]} 
+            onPress={() => resolveCurrentStream(availableServers, currentServerIndex)}
+          >
+            <Text style={styles.errorActionText}>Retry</Text>
+          </PressableScale>
+          <PressableScale style={styles.errorActionButton} onPress={handleExitPlayer}>
+            <Text style={styles.errorActionText}>Go Back</Text>
+          </PressableScale>
+        </View>
       </View>
     );
   }
 
+  // =========================================================================
+  // 13. MAIN PLAYER INTERFACE
+  // =========================================================================
   return (
-    <View style={styles.container}>
-      {/* 1. NATIVE EXPO VIDEO */}
+    <View style={styles.rootContainer}>
+      {/* NATIVE EXPO-AV VIDEO ENGINE */}
       <Video
         ref={videoRef}
-        style={styles.videoPlayer}
-        source={{ 
+        style={StyleSheet.absoluteFillObject}
+        source={{
           uri: streamData.m3u8,
           overrideFileExtensionAndroid: 'm3u8',
           headers: {
@@ -579,40 +934,89 @@ export default function Player({ route, navigation }) {
         }}
         useNativeControls={false}
         resizeMode={resizeMode}
-        onPlaybackStatusUpdate={setStatus}
+        onPlaybackStatusUpdate={onPlaybackStatusUpdate}
         shouldPlay
       />
 
-      {/* 2. BRIGHTNESS TINT OVERLAY */}
+      {/* HARDWARE BRIGHTNESS DIMMING OVERLAY */}
       <View 
-        style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${brightnessOverlay})` }]} 
+        style={[StyleSheet.absoluteFillObject, { backgroundColor: `rgba(0,0,0,${brightnessLevel})` }]} 
         pointerEvents="none" 
       />
 
-      {/* 3. SUBTITLE RENDERING */}
-      {subtitlesEnabled && currentSubText !== '' && (
-        <View style={[styles.subtitleContainer, { bottom: subHeight }]} pointerEvents="none">
-          <Text style={[styles.subtitleText, { color: subColor, fontSize: subSize }]}>
-            {currentSubText}
+      {/* TOAST GESTURE INDICATOR */}
+      {toastMessage && (
+        <View style={styles.toastContainer} pointerEvents="none">
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </View>
+      )}
+
+      {/* SUBTITLE RENDERER */}
+      {selectedSubTrackIndex >= 0 && currentSubtitleText !== '' && (
+        <View 
+          style={[styles.subtitleContainer, { bottom: computedSubtitleBottom }]} 
+          pointerEvents="none"
+        >
+          <Text 
+            style={[
+              styles.subtitleText, 
+              { 
+                color: subColor, 
+                fontSize: subSize, 
+                backgroundColor: `rgba(0,0,0,${subBgOpacity})` 
+              }
+            ]}
+          >
+            {currentSubtitleText}
           </Text>
         </View>
       )}
 
-      {/* 4. NETFLIX-STYLE METADATA OVERLAY */}
+      {/* WHITE BUFFERING INDICATOR */}
+      {(!status.isLoaded || status.isBuffering) && (
+        <View style={styles.bufferingContainer} pointerEvents="none">
+          <ActivityIndicator size="large" color="#FFFFFF" />
+        </View>
+      )}
+
+      {/* DOUBLE TAP ACCUMULATIVE SEEK INDICATOR */}
+      <Animated.View 
+        style={[
+          styles.seekIndicatorContainer,
+          seekDirection === 'left' ? styles.seekLeftPos : styles.seekRightPos,
+          { opacity: seekIndicatorAnim, transform: [{ scale: seekIndicatorAnim }] }
+        ]} 
+        pointerEvents="none"
+      >
+        {seekDirection === 'left' ? <IconReplay10 size={36} /> : <IconForward10 size={36} />}
+        <Text style={styles.seekIndicatorText}>{Math.abs(seekDelta)} seconds</Text>
+      </Animated.View>
+
+      {/* TOUCH LISTENER & PAN RESPONDER LAYER */}
+      <View {...panResponder.panHandlers} style={StyleSheet.absoluteFillObject}>
+        <TouchableWithoutFeedback onPress={handleTouchZone}>
+          <View style={StyleSheet.absoluteFillObject} />
+        </TouchableWithoutFeedback>
+      </View>
+
+      {/* NETFLIX-STYLE METADATA BANNER OVERLAY */}
       {tmdbMeta && (
-        <Animated.View style={[styles.netflixOverlayWrapper, { opacity: infoOverlayOpacity }]} pointerEvents="none">
+        <Animated.View 
+          style={[styles.netflixMetaOverlay, { opacity: metaOverlayOpacity }]} 
+          pointerEvents="none"
+        >
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
             <Defs>
-              <LinearGradient id="infoGrad" x1="0" y1="0" x2="1" y2="1">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
-                <Stop offset="0.6" stopColor="#000000" stopOpacity="0.45" />
+              <LinearGradient id="metaGrad" x1="0" y1="0" x2="1" y2="1">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.88" />
+                <Stop offset="0.65" stopColor="#000000" stopOpacity="0.4" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill="url(#infoGrad)" />
+            <Rect width="100%" height="100%" fill="url(#metaGrad)" />
           </Svg>
-          <View style={styles.netflixInfoCard}>
-            <View style={styles.metaRowHeader}>
+          <View style={styles.metaContentBox}>
+            <View style={styles.metaHeaderRow}>
               {tmdbMeta.certification && (
                 <View style={styles.certBadge}>
                   <Text style={styles.certBadgeText}>{tmdbMeta.certification}</Text>
@@ -620,11 +1024,11 @@ export default function Player({ route, navigation }) {
               )}
               {tmdbMeta.genres ? <Text style={styles.genreTags}>{tmdbMeta.genres}</Text> : null}
             </View>
-            <Text style={styles.metaEpisodeHeader} numberOfLines={1}>
+            <Text style={styles.metaEpisodeTitle} numberOfLines={1}>
               S{tmdbMeta.seasonNumber} E{tmdbMeta.episodeNumber} — {tmdbMeta.title}
             </Text>
             {tmdbMeta.overview ? (
-              <Text style={styles.metaDescription} numberOfLines={3}>
+              <Text style={styles.metaOverviewText} numberOfLines={3}>
                 {tmdbMeta.overview}
               </Text>
             ) : null}
@@ -632,297 +1036,559 @@ export default function Player({ route, navigation }) {
         </Animated.View>
       )}
 
-      {/* 5. DYNAMIC WHITE BUFFERING SPINNER */}
-      {(!status.isLoaded || status.isBuffering) && (
-        <View style={styles.bufferingOverlay} pointerEvents="none">
-          <ActivityIndicator size="large" color="#FFFFFF" />
-        </View>
-      )}
-
-      {/* 6. GESTURE TOAST NOTIFICATION */}
-      {gestureText && (
-        <View style={styles.gestureIndicator} pointerEvents="none">
-          <Text style={styles.gestureText}>{gestureText}</Text>
-        </View>
-      )}
-
-      {/* 7. PAN RESPONDER & DOUBLE-TAP TOUCH SENSOR */}
-      <View {...panResponder.panHandlers} style={[StyleSheet.absoluteFillObject, { zIndex: 5 }]}>
-        <TouchableWithoutFeedback onPress={handleTouchOverlay}>
-          <View style={StyleSheet.absoluteFillObject} />
-        </TouchableWithoutFeedback>
-      </View>
-
-      {/* 8. SKIP SEEK TOASTS */}
-      {showSkipIndicator === 'left' && (
-        <View style={styles.skipLeftInd} pointerEvents="none">
-          <IconBackward size={32} color="#FFF" />
-          <Text style={styles.skipText}>-10s</Text>
-        </View>
-      )}
-      {showSkipIndicator === 'right' && (
-        <View style={styles.skipRightInd} pointerEvents="none">
-          <IconForward size={32} color="#FFF" />
-          <Text style={styles.skipText}>+10s</Text>
-        </View>
-      )}
-
-      {/* 9. FLOATING SKIP INTRO BUTTON */}
-      {showSkipButton && (
-        <Animated.View style={[styles.skipIntroFloat, { opacity: skipIntroOpacity }]}>
-          <TouchableOpacity 
-            onPress={() => videoRef.current?.setPositionAsync(introData.end * 1000)} 
-            style={styles.skipIntroBtnInner}
-            activeOpacity={0.8}
+      {/* SKIP INTRO BUTTON */}
+      {inIntro && (
+        <Animated.View 
+          style={[
+            styles.skipIntroContainer, 
+            { opacity: skipButtonAnim, transform: [{ scale: skipButtonAnim }] }
+          ]}
+        >
+          <PressableScale 
+            style={styles.skipIntroButton}
+            onPress={() => videoRef.current?.setPositionAsync(introRegion.end * 1000)}
           >
             <Text style={styles.skipIntroText}>Skip Intro</Text>
-            <IconForward size={14} color="#000" />
-          </TouchableOpacity>
+            <IconForward10 size={16} color="#000" />
+          </PressableScale>
         </Animated.View>
       )}
 
-      {/* 10. GRADIENT CONTROLS OVERLAY */}
-      <Animated.View style={[styles.uiLayer, { opacity: uiOpacity }]} pointerEvents={showUI ? 'auto' : 'none'}>
-        
-        {/* TOP BAR WITH GRADIENT */}
-        <View style={styles.topBar}>
+      {/* SKIP OUTRO / PLAY NEXT EPISODE CARD */}
+      {inOutro && hasNextEpisode && !nextEpisodeDismissed && (
+        <Animated.View 
+          style={[
+            styles.nextCardContainer, 
+            { opacity: nextCardAnim, transform: [{ scale: nextCardAnim }] }
+          ]}
+        >
+          <View style={styles.nextCardHeader}>
+            <Text style={styles.nextCardSubtitle}>NEXT EPISODE</Text>
+            <TouchableOpacity onPress={() => setNextEpisodeDismissed(true)}>
+              <Text style={styles.nextCardDismiss}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.nextCardTitle}>Episode {parseInt(episodeNum, 10) + 1}</Text>
+          <PressableScale style={styles.nextCardPlayBtn} onPress={handleNextEpisode}>
+            <IconPlay size={16} color="#000" />
+            <Text style={styles.nextCardPlayBtnText}>Play Next</Text>
+          </PressableScale>
+        </Animated.View>
+      )}
+
+      {/* CINEMATIC GRADIENT & PLAYER CONTROL DECK */}
+      <Animated.View 
+        style={[styles.controlsDeck, { opacity: uiOpacity }]} 
+        pointerEvents={showUI ? 'auto' : 'none'}
+      >
+        {/* TOP GRADIENT BAR */}
+        <View style={styles.topControlBar}>
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
-              <LinearGradient id="topG" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
+              <LinearGradient id="topGradient" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.9" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill="url(#topG)" />
+            <Rect width="100%" height="100%" fill="url(#topGradient)" />
           </Svg>
-          <TouchableOpacity onPress={handleClosePlayer} style={styles.backBtn} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
-            <IconBack size={24} color="#FFF" />
-          </TouchableOpacity>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.animeTitle} numberOfLines={1}>{animeTitle}</Text>
-            <Text style={styles.episodeTitle}>
+
+          <PressableScale style={styles.topBarBackButton} onPress={handleExitPlayer}>
+            <IconBackArrow size={26} />
+          </PressableScale>
+
+          <View style={styles.topBarTitleBox}>
+            <Text style={styles.topAnimeTitle} numberOfLines={1}>{animeTitle}</Text>
+            <Text style={styles.topEpisodeSubtitle}>
               {tmdbMeta ? `Season ${tmdbMeta.seasonNumber} • Episode ${tmdbMeta.episodeNumber}` : `Episode ${episodeNum}`}
             </Text>
           </View>
         </View>
 
-        {/* CENTER PLAY/PAUSE */}
-        <View style={styles.centerControls} pointerEvents="box-none">
-          <TouchableOpacity onPress={seekBackward} style={styles.skipCircleBtn} activeOpacity={0.7}>
-            <IconBackward size={28} color="#FFF" />
-          </TouchableOpacity>
+        {/* CENTER TRANSPORT CONTROLS */}
+        <View style={styles.centerControlDeck} pointerEvents="box-none">
+          <PressableScale style={styles.circleActionButton} onPress={() => handleSeekDelta(-10)}>
+            <IconReplay10 size={30} />
+          </PressableScale>
 
-          <TouchableOpacity onPress={togglePlayPause} style={styles.playPauseBtn} activeOpacity={0.8}>
-            {status.isPlaying ? <IconPause size={34} color="#FFF" /> : <IconPlay size={34} color="#FFF" />}
-          </TouchableOpacity>
+          <PressableScale style={styles.circlePlayPauseButton} onPress={togglePlayPause}>
+            {status.isPlaying ? <IconPause size={38} /> : <IconPlay size={38} />}
+          </PressableScale>
 
-          <TouchableOpacity onPress={seekForward} style={styles.skipCircleBtn} activeOpacity={0.7}>
-            <IconForward size={28} color="#FFF" />
-          </TouchableOpacity>
+          <PressableScale style={styles.circleActionButton} onPress={() => handleSeekDelta(10)}>
+            <IconForward10 size={30} />
+          </PressableScale>
         </View>
 
-        {/* SETTINGS MENUS */}
-        {activeMenu === 'main' && (
-          <View style={styles.settingsMenu}>
-            <Text style={styles.menuHeader}>Settings</Text>
-            <TouchableOpacity style={styles.menuRow} onPress={() => setActiveMenu('subs')}>
-              <Text style={styles.menuText}>Subtitles Style</Text>
-              <Text style={styles.menuValue}>Customize ›</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.menuRow} onPress={() => {
-              const next = playbackSpeed === 1.0 ? 1.25 : playbackSpeed === 1.25 ? 1.5 : playbackSpeed === 1.5 ? 2.0 : 1.0;
-              setPlaybackSpeed(next);
-              videoRef.current?.setRateAsync(next, true);
-            }}>
-              <Text style={styles.menuText}>Speed</Text>
-              <Text style={styles.menuValue}>{playbackSpeed}x</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.menuRow} onPress={() => setResizeMode(resizeMode === ResizeMode.CONTAIN ? ResizeMode.COVER : ResizeMode.CONTAIN)}>
-              <Text style={styles.menuText}>Aspect Ratio</Text>
-              <Text style={styles.menuValue}>{resizeMode === ResizeMode.CONTAIN ? 'Fit' : 'Fill'}</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {activeMenu === 'subs' && (
-          <View style={styles.settingsMenu}>
-            <TouchableOpacity onPress={() => setActiveMenu('main')} style={{ marginBottom: 12 }}>
-              <Text style={styles.backMenuText}>‹ Back</Text>
-            </TouchableOpacity>
-            <Text style={styles.menuHeader}>Subtitle Styles</Text>
-
-            <Text style={styles.subMenuLabel}>Color</Text>
-            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
-              {['#FFFFFF', '#F47521', '#FACC15', '#4ADE80'].map(c => (
-                <TouchableOpacity 
-                  key={c} 
-                  onPress={() => setSubColor(c)} 
-                  style={[styles.colorDot, { backgroundColor: c }, subColor === c && styles.colorDotActive]} 
-                />
-              ))}
-            </View>
-
-            <Text style={styles.subMenuLabel}>Size</Text>
-            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
-              {[14, 16, 20, 24].map(s => (
-                <TouchableOpacity key={s} onPress={() => setSubSize(s)} style={[styles.stylePill, subSize === s && styles.stylePillActive]}>
-                  <Text style={[styles.stylePillText, subSize === s && { color: BRAND_RED }]}>{s}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.subMenuLabel}>Position Offset</Text>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              {[20, 35, 60].map(h => (
-                <TouchableOpacity key={h} onPress={() => setSubHeight(h)} style={[styles.stylePill, subHeight === h && styles.stylePillActive]}>
-                  <Text style={[styles.stylePillText, subHeight === h && { color: BRAND_RED }]}>{h}px</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* BOTTOM CONTROLS WITH GRADIENT */}
-        <View style={styles.bottomBar}>
+        {/* BOTTOM TIMELINE & DRAWER TRIGGERS */}
+        <View style={styles.bottomControlBar}>
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
-              <LinearGradient id="botG" x1="0" y1="1" x2="0" y2="0">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
+              <LinearGradient id="botGradient" x1="0" y1="1" x2="0" y2="0">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.96" />
+                <Stop offset="0.75" stopColor="#000000" stopOpacity="0.6" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill="url(#botG)" />
+            <Rect width="100%" height="100%" fill="url(#botGradient)" />
           </Svg>
 
-          <View style={styles.progressBarRow}>
-            <Text style={styles.timeText}>{formatTime(status.positionMillis || 0)}</Text>
+          {/* SCRUBBING TIMELINE */}
+          <View style={styles.timelineRow}>
+            <Text style={styles.timestampText}>
+              {formatTimestamp(isScrubbing ? scrubPosition : status.positionMillis)}
+            </Text>
             <Slider
-              style={styles.slider}
+              style={styles.timelineSlider}
               minimumValue={0}
               maximumValue={status.durationMillis || 100}
-              value={status.positionMillis || 0}
+              value={isScrubbing ? scrubPosition : (status.positionMillis || 0)}
               minimumTrackTintColor={BRAND_RED}
               maximumTrackTintColor="rgba(255,255,255,0.25)"
               thumbTintColor={BRAND_RED}
-              onSlidingComplete={handleSliderChange}
-              onSlidingStart={() => { if (hideUITimeout.current) clearTimeout(hideUITimeout.current); }}
+              onSlidingStart={handleSlidingStart}
+              onValueChange={handleSliderValueChange}
+              onSlidingComplete={handleSlidingComplete}
             />
-            <Text style={styles.timeText}>{formatTime(status.durationMillis || 0)}</Text>
+            <Text style={styles.timestampText}>
+              {formatTimestamp(status.durationMillis)}
+            </Text>
           </View>
 
-          <View style={styles.actionRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-              <TouchableOpacity onPress={() => setSubtitlesEnabled(!subtitlesEnabled)}>
-                <IconSubs size={22} color={subtitlesEnabled ? "#FFF" : "#666"} />
-              </TouchableOpacity>
+          {/* ACTION BUTTONS ROW */}
+          <View style={styles.bottomActionButtonsRow}>
+            <View style={styles.leftActionCluster}>
+              <PressableScale style={styles.iconHitBox} onPress={() => openDrawer('subtitles')}>
+                <IconSubtitles size={22} color={selectedSubTrackIndex >= 0 ? BRAND_RED : "#FFF"} />
+              </PressableScale>
             </View>
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18 }}>
-              {introData.end > 0 && (
-                <TouchableOpacity 
-                  onPress={() => videoRef.current?.setPositionAsync(introData.end * 1000)}
-                  style={styles.miniSkipBtn}
+            <View style={styles.rightActionCluster}>
+              {introRegion.end > 0 && (
+                <PressableScale 
+                  style={styles.miniInlineSkipBtn} 
+                  onPress={() => videoRef.current?.setPositionAsync(introRegion.end * 1000)}
                 >
-                  <Text style={styles.miniSkipText}>Skip Intro</Text>
-                </TouchableOpacity>
+                  <Text style={styles.miniInlineSkipText}>Skip Intro</Text>
+                </PressableScale>
               )}
 
-              <TouchableOpacity onPress={() => {/* Next episode navigation hook */}}>
-                <IconSkip size={20} color="#FFF" />
-              </TouchableOpacity>
+              {hasNextEpisode && (
+                <PressableScale style={styles.iconHitBox} onPress={handleNextEpisode}>
+                  <IconNextEp size={22} />
+                </PressableScale>
+              )}
 
-              <TouchableOpacity onPress={() => setActiveMenu(activeMenu ? null : 'main')}>
-                <IconSettings size={22} color={activeMenu ? BRAND_RED : "#FFF"} />
-              </TouchableOpacity>
+              <PressableScale style={styles.iconHitBox} onPress={() => openDrawer('main')}>
+                <IconSettings size={22} />
+              </PressableScale>
             </View>
           </View>
         </View>
-
       </Animated.View>
+
+      {/* =========================================================================
+          NETFLIX-STYLE RIGHT SLIDING DRAWER PANELS
+         ========================================================================= */}
+      {activeDrawer !== null && (
+        <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+          <TouchableWithoutFeedback onPress={closeDrawer}>
+            <View style={styles.drawerBackdrop} />
+          </TouchableWithoutFeedback>
+
+          <Animated.View 
+            style={[
+              styles.drawerContainer, 
+              { width: panelWidth, transform: [{ translateX: drawerAnim }] }
+            ]}
+          >
+            {/* MAIN SETTINGS PANEL */}
+            {activeDrawer === 'main' && (
+              <ScrollView style={styles.drawerScroll} bounces={false}>
+                <Text style={styles.drawerHeader}>Settings</Text>
+
+                <TouchableOpacity style={styles.drawerRow} onPress={() => setActiveDrawer('quality')}>
+                  <Text style={styles.drawerRowTitle}>Quality</Text>
+                  <Text style={styles.drawerRowValue}>Auto ›</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.drawerRow} onPress={() => setActiveDrawer('audio')}>
+                  <Text style={styles.drawerRowTitle}>Audio</Text>
+                  <Text style={styles.drawerRowValue}>{targetType === 'dub' ? 'English' : 'Japanese'} ›</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.drawerRow} onPress={() => setActiveDrawer('subtitles')}>
+                  <Text style={styles.drawerRowTitle}>Subtitles</Text>
+                  <Text style={styles.drawerRowValue}>
+                    {selectedSubTrackIndex >= 0 ? subtitleTracks[selectedSubTrackIndex]?.label || 'On' : 'Off'} ›
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.drawerRow} onPress={() => setActiveDrawer('subtitle_style')}>
+                  <Text style={styles.drawerRowTitle}>Subtitle Style</Text>
+                  <Text style={styles.drawerRowValue}>Customize ›</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                  style={styles.drawerRow} 
+                  onPress={() => {
+                    const nextSpeed = playbackSpeed === 1.0 ? 1.25 : playbackSpeed === 1.25 ? 1.5 : playbackSpeed === 1.5 ? 2.0 : 1.0;
+                    setPlaybackSpeed(nextSpeed);
+                    videoRef.current?.setRateAsync(nextSpeed, true);
+                  }}
+                >
+                  <Text style={styles.drawerRowTitle}>Playback Speed</Text>
+                  <Text style={styles.drawerRowValue}>{playbackSpeed}x</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                  style={styles.drawerRow} 
+                  onPress={() => setResizeMode(resizeMode === ResizeMode.CONTAIN ? ResizeMode.COVER : ResizeMode.CONTAIN)}
+                >
+                  <Text style={styles.drawerRowTitle}>Aspect Ratio</Text>
+                  <Text style={styles.drawerRowValue}>{resizeMode === ResizeMode.CONTAIN ? 'Fit' : 'Fill'}</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+
+            {/* QUALITY PANEL */}
+            {activeDrawer === 'quality' && (
+              <ScrollView style={styles.drawerScroll} bounces={false}>
+                <TouchableOpacity style={styles.drawerBackNav} onPress={() => setActiveDrawer('main')}>
+                  <Text style={styles.drawerBackNavText}>‹ Back</Text>
+                </TouchableOpacity>
+                <Text style={styles.drawerHeader}>Quality</Text>
+
+                <TouchableOpacity style={styles.drawerSelectableRow} onPress={closeDrawer}>
+                  <Text style={[styles.drawerSelectableText, { color: BRAND_RED }]}>Auto (HLS Stream)</Text>
+                  <IconCheck size={18} />
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+
+            {/* AUDIO PANEL */}
+            {activeDrawer === 'audio' && (
+              <ScrollView style={styles.drawerScroll} bounces={false}>
+                <TouchableOpacity style={styles.drawerBackNav} onPress={() => setActiveDrawer('main')}>
+                  <Text style={styles.drawerBackNavText}>‹ Back</Text>
+                </TouchableOpacity>
+                <Text style={styles.drawerHeader}>Audio</Text>
+
+                <TouchableOpacity style={styles.drawerSelectableRow} onPress={closeDrawer}>
+                  <Text style={[styles.drawerSelectableText, { color: BRAND_RED }]}>
+                    {targetType === 'dub' ? 'English (Stream Default)' : 'Japanese (Original)'}
+                  </Text>
+                  <IconCheck size={18} />
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+
+            {/* SUBTITLES PANEL */}
+            {activeDrawer === 'subtitles' && (
+              <ScrollView style={styles.drawerScroll} bounces={false}>
+                <TouchableOpacity style={styles.drawerBackNav} onPress={() => setActiveDrawer('main')}>
+                  <Text style={styles.drawerBackNavText}>‹ Back</Text>
+                </TouchableOpacity>
+                <Text style={styles.drawerHeader}>Subtitles</Text>
+
+                <TouchableOpacity 
+                  style={styles.drawerSelectableRow} 
+                  onPress={() => { setSelectedSubTrackIndex(-1); closeDrawer(); }}
+                >
+                  <Text style={[styles.drawerSelectableText, selectedSubTrackIndex === -1 && { color: BRAND_RED }]}>
+                    Off
+                  </Text>
+                  {selectedSubTrackIndex === -1 && <IconCheck size={18} />}
+                </TouchableOpacity>
+
+                {subtitleTracks.map((item, idx) => (
+                  <TouchableOpacity 
+                    key={idx} 
+                    style={styles.drawerSelectableRow} 
+                    onPress={() => { setSelectedSubTrackIndex(idx); closeDrawer(); }}
+                  >
+                    <Text style={[styles.drawerSelectableText, selectedSubTrackIndex === idx && { color: BRAND_RED }]}>
+                      {item.label || `Track ${idx + 1}`}
+                    </Text>
+                    {selectedSubTrackIndex === idx && <IconCheck size={18} />}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+
+            {/* SUBTITLE STYLES PANEL */}
+            {activeDrawer === 'subtitle_style' && (
+              <ScrollView style={styles.drawerScroll} bounces={false}>
+                <TouchableOpacity style={styles.drawerBackNav} onPress={() => setActiveDrawer('main')}>
+                  <Text style={styles.drawerBackNavText}>‹ Back</Text>
+                </TouchableOpacity>
+                <Text style={styles.drawerHeader}>Subtitle Styles</Text>
+
+                <Text style={styles.drawerSectionLabel}>Text Color</Text>
+                <View style={styles.colorPaletteRow}>
+                  {['#FFFFFF', '#F47521', '#FACC15', '#4ADE80'].map(hex => (
+                    <TouchableOpacity 
+                      key={hex} 
+                      onPress={() => setSubColor(hex)} 
+                      style={[styles.colorBubble, { backgroundColor: hex }, subColor === hex && styles.colorBubbleActive]} 
+                    />
+                  ))}
+                </View>
+
+                <Text style={styles.drawerSectionLabel}>Font Size</Text>
+                <View style={styles.pillSelectionRow}>
+                  {[14, 16, 20, 24].map(px => (
+                    <TouchableOpacity 
+                      key={px} 
+                      onPress={() => setSubSize(px)} 
+                      style={[styles.pillButton, subSize === px && styles.pillButtonActive]}
+                    >
+                      <Text style={[styles.pillButtonText, subSize === px && { color: BRAND_RED }]}>{px}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.drawerSectionLabel}>Position Offset</Text>
+                <View style={styles.pillSelectionRow}>
+                  {[20, 35, 60].map(h => (
+                    <TouchableOpacity 
+                      key={h} 
+                      onPress={() => setSubElevation(h)} 
+                      style={[styles.pillButton, subElevation === h && styles.pillButtonActive]}
+                    >
+                      <Text style={[styles.pillButtonText, subElevation === h && { color: BRAND_RED }]}>{h}px</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={styles.drawerSectionLabel}>Background Opacity</Text>
+                <View style={styles.pillSelectionRow}>
+                  {[0.0, 0.45, 0.75].map(op => (
+                    <TouchableOpacity 
+                      key={op} 
+                      onPress={() => setSubBgOpacity(op)} 
+                      style={[styles.pillButton, subBgOpacity === op && styles.pillButtonActive]}
+                    >
+                      <Text style={[styles.pillButtonText, subBgOpacity === op && { color: BRAND_RED }]}>
+                        {op === 0.0 ? 'None' : `${Math.round(op * 100)}%`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            )}
+          </Animated.View>
+        </View>
+      )}
     </View>
   );
 }
 
+// =========================================================================
+// STYLES
+// =========================================================================
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000000' },
-  videoPlayer: { ...StyleSheet.absoluteFillObject },
+  rootContainer: { flex: 1, backgroundColor: '#000000' },
+  blackBackgroundCenter: { flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  loadingStreamText: { color: '#888888', marginTop: 14, fontSize: 13, letterSpacing: 0.5 },
+  bufferingContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 4 },
 
-  loaderContainerFull: { flex: 1, backgroundColor: '#050505', justifyContent: 'center', alignItems: 'center' },
-  loaderText: { color: '#888', marginTop: 12, fontSize: 12, letterSpacing: 0.5 },
-  bufferingOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 4 },
+  // Toast Notifications
+  toastContainer: { 
+    position: 'absolute', 
+    top: 36, 
+    alignSelf: 'center', 
+    backgroundColor: 'rgba(0,0,0,0.82)', 
+    paddingHorizontal: 18, 
+    paddingVertical: 7, 
+    borderRadius: 20, 
+    zIndex: 25,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)'
+  },
+  toastText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
 
-  gestureIndicator: { position: 'absolute', top: 35, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.75)', paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20, zIndex: 20 },
-  gestureText: { color: '#FFF', fontSize: 13, fontWeight: 'bold' },
+  // Subtitles
+  subtitleContainer: { position: 'absolute', width: '100%', alignItems: 'center', zIndex: 9, paddingHorizontal: 40 },
+  subtitleText: { 
+    fontWeight: '900', 
+    textAlign: 'center', 
+    textShadowColor: '#000000', 
+    textShadowOffset: { width: 1, height: 1 }, 
+    textShadowRadius: 4, 
+    paddingHorizontal: 10, 
+    paddingVertical: 3, 
+    borderRadius: 4 
+  },
 
-  subtitleContainer: { position: 'absolute', width: '100%', alignItems: 'center', zIndex: 9, paddingHorizontal: 30 },
-  subtitleText: { fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
+  // Seeking Bubbles
+  seekIndicatorContainer: { 
+    position: 'absolute', 
+    top: '40%', 
+    alignItems: 'center', 
+    backgroundColor: 'rgba(0,0,0,0.72)', 
+    padding: 20, 
+    borderRadius: 50,
+    zIndex: 15
+  },
+  seekLeftPos: { left: '16%' },
+  seekRightPos: { right: '16%' },
+  seekIndicatorText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800', marginTop: 6 },
 
-  // Netflix Information Overlay
-  netflixOverlayWrapper: {
+  // Netflix Metadata Banner
+  netflixMetaOverlay: {
     position: 'absolute',
-    top: 75,
-    left: 25,
-    width: SCREEN_WIDTH * 0.45,
+    top: 72,
+    left: 28,
+    width: 380,
     borderRadius: 8,
     overflow: 'hidden',
-    padding: 14,
+    padding: 16,
     zIndex: 8
   },
-  netflixInfoCard: { zIndex: 2 },
-  metaRowHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  metaContentBox: { zIndex: 2 },
+  metaHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
   certBadge: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
-  certBadgeText: { color: '#FFF', fontSize: 9, fontWeight: 'bold' },
-  genreTags: { color: '#CCC', fontSize: 10, fontWeight: '600' },
-  metaEpisodeHeader: { color: '#FFF', fontSize: 14, fontWeight: 'bold', marginVertical: 4 },
-  metaDescription: { color: '#BBB', fontSize: 10, lineHeight: 14 },
+  certBadgeText: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
+  genreTags: { color: '#CCCCCC', fontSize: 11, fontWeight: '600' },
+  metaEpisodeTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '800', marginVertical: 4 },
+  metaOverviewText: { color: '#BBBBBB', fontSize: 11, lineHeight: 15 },
 
-  // Controls Layer
-  uiLayer: { ...StyleSheet.absoluteFillObject, zIndex: 10, justifyContent: 'space-between' },
-  topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 25, paddingTop: 20, paddingBottom: 25, width: '100%' },
-  backBtn: { marginRight: 18 },
-  animeTitle: { color: '#FFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.3 },
-  episodeTitle: { color: '#AAA', fontSize: 11, fontWeight: '600', marginTop: 2 },
+  // Skip Intro Floating Button
+  skipIntroContainer: { position: 'absolute', bottom: 110, right: 34, zIndex: 30 },
+  skipIntroButton: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: '#FFFFFF', 
+    paddingHorizontal: 16, 
+    paddingVertical: 9, 
+    borderRadius: 6, 
+    gap: 6 
+  },
+  skipIntroText: { color: '#000000', fontWeight: '900', fontSize: 12, textTransform: 'uppercase' },
 
-  centerControls: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 40 },
-  playPauseBtn: { width: 68, height: 68, borderRadius: 34, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)' },
-  skipCircleBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
+  // Next Episode Card
+  nextCardContainer: {
+    position: 'absolute',
+    bottom: 95,
+    right: 30,
+    backgroundColor: 'rgba(18,18,18,0.95)',
+    borderRadius: 10,
+    padding: 16,
+    width: 220,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    zIndex: 30
+  },
+  nextCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  nextCardSubtitle: { color: '#888888', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  nextCardDismiss: { color: '#AAAAAA', fontSize: 13, fontWeight: '700' },
+  nextCardTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '800', marginBottom: 12 },
+  nextCardPlayBtn: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    backgroundColor: '#FFFFFF', 
+    paddingVertical: 8, 
+    borderRadius: 5, 
+    gap: 6 
+  },
+  nextCardPlayBtnText: { color: '#000000', fontSize: 12, fontWeight: '800' },
 
-  skipLeftInd: { position: 'absolute', left: '16%', top: '44%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 18, borderRadius: 45 },
-  skipRightInd: { position: 'absolute', right: '16%', top: '44%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 18, borderRadius: 45 },
-  skipText: { color: '#FFF', fontSize: 12, fontWeight: 'bold', marginTop: 4 },
+  // Controls Deck Layout
+  controlsDeck: { ...StyleSheet.absoluteFillObject, zIndex: 10, justifyContent: 'space-between' },
+  topControlBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 26, paddingTop: 20, paddingBottom: 28, width: '100%' },
+  topBarBackButton: { marginRight: 18 },
+  topBarTitleBox: { flex: 1 },
+  topAnimeTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.3 },
+  topEpisodeSubtitle: { color: '#AAAAAA', fontSize: 12, fontWeight: '600', marginTop: 2 },
 
-  skipIntroFloat: { position: 'absolute', bottom: 100, right: 30, zIndex: 30 },
-  skipIntroBtnInner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 6, gap: 5 },
-  skipIntroText: { color: '#000', fontWeight: '900', fontSize: 11, textTransform: 'uppercase' },
+  // Transport Center Controls
+  centerControlDeck: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 48 },
+  circlePlayPauseButton: { 
+    width: 72, 
+    height: 72, 
+    borderRadius: 36, 
+    backgroundColor: 'rgba(0,0,0,0.55)', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    borderWidth: 1.5, 
+    borderColor: 'rgba(255,255,255,0.2)' 
+  },
+  circleActionButton: { 
+    width: 48, 
+    height: 48, 
+    borderRadius: 24, 
+    backgroundColor: 'rgba(0,0,0,0.4)', 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
 
-  settingsMenu: { position: 'absolute', bottom: 85, right: 25, backgroundColor: 'rgba(18,18,18,0.96)', borderRadius: 12, padding: 18, width: 260, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
-  menuHeader: { color: '#FFF', fontSize: 15, fontWeight: 'bold', marginBottom: 12 },
-  menuRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.06)' },
-  menuText: { color: '#DDD', fontSize: 13, fontWeight: '600' },
-  menuValue: { color: BRAND_RED, fontSize: 12, fontWeight: 'bold' },
-  backMenuText: { color: BRAND_RED, fontSize: 13, fontWeight: 'bold' },
+  // Bottom Controls
+  bottomControlBar: { width: '100%', paddingHorizontal: 28, paddingBottom: 22, paddingTop: 30 },
+  timelineRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  timestampText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  timelineSlider: { flex: 1, marginHorizontal: 10, height: 38 },
+  bottomActionButtonsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  leftActionCluster: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  rightActionCluster: { flexDirection: 'row', alignItems: 'center', gap: 18 },
+  iconHitBox: { minWidth: 44, minHeight: 44, justifyContent: 'center', alignItems: 'center' },
 
-  subMenuLabel: { color: '#777', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 6 },
-  colorDot: { width: 22, height: 22, borderRadius: 11 },
-  colorDotActive: { borderWidth: 2, borderColor: '#FFF' },
-  stylePill: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 4 },
-  stylePillActive: { borderColor: BRAND_RED, borderWidth: 1 },
-  stylePillText: { color: '#FFF', fontSize: 11, fontWeight: 'bold' },
+  miniInlineSkipBtn: { backgroundColor: 'rgba(255,255,255,0.18)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 4 },
+  miniInlineSkipText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
 
-  bottomBar: { width: '100%', paddingHorizontal: 25, paddingBottom: 20, paddingTop: 25 },
-  progressBarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  timeText: { color: '#FFF', fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  slider: { flex: 1, marginHorizontal: 10, height: 35 },
-  actionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4 },
+  // Drawer Side Panel System
+  drawerBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.65)' },
+  drawerContainer: { 
+    position: 'absolute', 
+    right: 0, 
+    top: 0, 
+    bottom: 0, 
+    backgroundColor: 'rgba(16,16,16,0.96)', 
+    borderTopLeftRadius: 16, 
+    borderBottomLeftRadius: 16, 
+    borderLeftWidth: 1, 
+    borderColor: 'rgba(255,255,255,0.1)',
+    zIndex: 40 
+  },
+  drawerScroll: { padding: 22 },
+  drawerHeader: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', marginBottom: 16 },
+  drawerRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    paddingVertical: 14, 
+    borderBottomWidth: 1, 
+    borderBottomColor: 'rgba(255,255,255,0.06)' 
+  },
+  drawerRowTitle: { color: '#DDDDDD', fontSize: 14, fontWeight: '600' },
+  drawerRowValue: { color: BRAND_RED, fontSize: 13, fontWeight: '700' },
 
-  miniSkipBtn: { backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
-  miniSkipText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
+  drawerBackNav: { marginBottom: 14 },
+  drawerBackNavText: { color: BRAND_RED, fontSize: 14, fontWeight: '800' },
+  drawerSelectableRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    paddingVertical: 13, 
+    borderBottomWidth: 1, 
+    borderBottomColor: 'rgba(255,255,255,0.05)' 
+  },
+  drawerSelectableText: { color: '#DDDDDD', fontSize: 14, fontWeight: '600' },
 
-  errorContainer: { flex: 1, backgroundColor: '#050505', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
-  errorTitle: { color: '#FFF', fontSize: 16, fontWeight: 'bold', marginBottom: 4 },
-  errorSub: { color: BRAND_RED, fontSize: 11, textAlign: 'center', marginBottom: 20 },
-  errorBtn: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 18, paddingVertical: 8, borderRadius: 6 },
-  errorBtnText: { color: '#FFF', fontWeight: 'bold' }
+  drawerSectionLabel: { color: '#777777', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', marginTop: 14, marginBottom: 8 },
+  colorPaletteRow: { flexDirection: 'row', gap: 12, marginBottom: 10 },
+  colorBubble: { width: 26, height: 26, borderRadius: 13 },
+  colorBubbleActive: { borderWidth: 2.5, borderColor: '#FFFFFF' },
+  pillSelectionRow: { flexDirection: 'row', gap: 10, marginBottom: 8 },
+  pillButton: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 5 },
+  pillButtonActive: { borderColor: BRAND_RED, borderWidth: 1 },
+  pillButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+
+  // Error Card System
+  errorHeader: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', marginBottom: 6 },
+  errorSub: { color: '#888888', fontSize: 12, textAlign: 'center', marginBottom: 24, maxWidth: 380 },
+  errorButtonsRow: { flexDirection: 'row', gap: 14 },
+  errorActionButton: { backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 18, paddingVertical: 10, borderRadius: 6 },
+  errorActionText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 }
 });
