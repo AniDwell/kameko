@@ -12,19 +12,18 @@ import firestore from '@react-native-firebase/firestore';
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
 
-// Worker Proxy to bypass ISP and Inject Referer Headers safely
+const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
+// YOUR MANDATORY PROXY
 const CUSTOM_PROXY_URL = 'https://icy-wave-30d8.prashant-yash69.workers.dev/proxy?url=';
 
 export default function Player({ route, navigation }) {
   const { 
-    streamUrl, 
-    referer = 'https://vidwish.live/', 
-    subtitles = [],
     animeTitle = 'Unknown', 
     episodeNum = 1, 
     episodeTitle = '', 
     animeId = null,
-    userUid = null
+    userUid = null,
+    targetType = 'sub'
   } = route?.params || {};
 
   const videoRef = useRef(null);
@@ -36,10 +35,15 @@ export default function Player({ route, navigation }) {
   const [resizeMode, setResizeMode] = useState(ResizeMode.CONTAIN);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [showSkipIndicator, setShowSkipIndicator] = useState(null); 
-  
   const [showSettings, setShowSettings] = useState(false);
 
-  // Advanced Systems: Logs & Subtitles
+  // Network & Stream State
+  const [streamData, setStreamData] = useState(null);
+  const [proxiedUri, setProxiedUri] = useState(null);
+  const [loadingStream, setLoadingStream] = useState(true);
+  const [fatalError, setFatalError] = useState(null);
+
+  // Logs & Subtitles
   const [logs, setLogs] = useState([]);
   const [showLogs, setShowLogs] = useState(false);
   const [parsedSubs, setParsedSubs] = useState([]);
@@ -54,14 +58,8 @@ export default function Player({ route, navigation }) {
     setLogs(prev => [...prev, `[${timestamp}] [${type}] ${msg}`]);
   };
 
-  const proxiedUri = streamUrl ? `${CUSTOM_PROXY_URL}${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(referer)}` : null;
-
-  // 1. Hardware Initialization
+  // 1. Hardware Initialization (No Screen Orientation to prevent crash)
   useEffect(() => {
-    addLog(`Initializing Engine for Ep ${episodeNum}...`);
-    addLog(`Stream URL: ${streamUrl}`);
-    addLog(`Proxy URL: ${proxiedUri}`);
-
     StatusBar.setHidden(true);
     const backHandler = BackHandler.addEventListener('hardwareBackPress', handleClosePlayer);
     return () => {
@@ -76,16 +74,84 @@ export default function Player({ route, navigation }) {
     return true;
   };
 
-  // 2. Custom VTT Subtitle Parser Engine
+  // 2. Exact Network Resolution Engine (Mirroring web player.js)
   useEffect(() => {
-    if (!subtitles || subtitles.length === 0) {
-      addLog("No subtitles provided in API payload.", "WARN");
+    let isMounted = true;
+
+    const resolveStream = async () => {
+      addLog(`Initializing Engine for Ep ${episodeNum}...`);
+      
+      let availableServersList = [];
+      try {
+        addLog("Fetching Available Servers...");
+        const srvRes = await fetch(`${VERCEL_API_BASE}/api/servers?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}`);
+        const srvJson = await srvRes.json();
+        if (srvJson.success && srvJson.data) {
+          availableServersList = srvJson.data;
+        }
+      } catch(e) {
+        addLog("Server list fetch failed, falling back to defaults.", "WARN");
+      }
+
+      let typeServers = availableServersList.filter(s => s.type === targetType).map(s => s.serverName);
+      if (typeServers.length === 0) {
+        typeServers = ['hd-1', 'hd-2', 'vidstream-2'];
+      }
+
+      const fetchServerStream = async (srv, type) => {
+        try {
+          const url = `${VERCEL_API_BASE}/api/stream?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}&server=${srv}&type=${type}`;
+          const res = await fetch(url);
+          const json = await res.json();
+          if (json.success && json.data?.m3u8) return json.data;
+        } catch (err) {}
+        return null;
+      };
+
+      let finalStreamData = null;
+      for (const srv of typeServers) {
+        addLog(`Connecting to ${srv.toUpperCase()} (${targetType.toUpperCase()})...`);
+        finalStreamData = await fetchServerStream(srv, targetType);
+        if (finalStreamData) {
+          addLog(`Connected successfully to ${srv.toUpperCase()}`, "SUCCESS");
+          break;
+        }
+      }
+
+      if (!isMounted) return;
+
+      if (!finalStreamData) {
+        setFatalError(`All servers are currently unresponsive for Episode ${episodeNum} (${targetType.toUpperCase()}).`);
+        setLoadingStream(false);
+        return;
+      }
+
+      setStreamData(finalStreamData);
+      
+      const streamUrl = finalStreamData.m3u8; 
+      const targetReferer = finalStreamData.referer || "https://vidwish.live/";
+      const builtProxyUri = `${CUSTOM_PROXY_URL}${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(targetReferer)}`;
+      
+      addLog(`Stream URL: ${streamUrl}`);
+      addLog(`Proxy URL: ${builtProxyUri}`);
+      
+      setProxiedUri(builtProxyUri);
+      setLoadingStream(false);
+    };
+
+    resolveStream();
+    return () => { isMounted = false; };
+  }, [animeId, episodeNum, targetType]);
+
+  // 3. Custom VTT Subtitle Parser Engine
+  useEffect(() => {
+    if (!streamData || !streamData.subtitles || streamData.subtitles.length === 0) {
       return;
     }
 
     const loadSubtitles = async () => {
       try {
-        const subUrl = subtitles[0].file;
+        const subUrl = streamData.subtitles[0].file;
         addLog(`Fetching VTT Subtitles: ${subUrl}`);
         
         const response = await fetch(subUrl);
@@ -116,17 +182,13 @@ export default function Player({ route, navigation }) {
               s += parseInt(parts[0], 10) * 60;
               s += parseFloat(parts[1].replace(',', '.'));
             }
-            return s * 1000; // Convert to milliseconds
+            return s * 1000;
           };
 
           const textLines = lines.slice(lines.indexOf(timeLine) + 1).filter(l => !l.startsWith('WEBVTT') && l.trim() !== '');
-          const cleanText = textLines.join('\n').replace(/<[^>]+>/g, ''); // Strip HTML/VTT tags
+          const cleanText = textLines.join('\n').replace(/<[^>]+>/g, ''); 
 
-          cues.push({
-            startMs: parseTime(startStr),
-            endMs: parseTime(endStr),
-            text: cleanText
-          });
+          cues.push({ startMs: parseTime(startStr), endMs: parseTime(endStr), text: cleanText });
         }
         
         setParsedSubs(cues);
@@ -137,13 +199,12 @@ export default function Player({ route, navigation }) {
     };
 
     loadSubtitles();
-  }, [subtitles]);
+  }, [streamData]);
 
-  // 3. Subtitle Syncing & Progress Saving
+  // 4. Subtitle Syncing & Progress Saving
   useEffect(() => {
     if (!status.isLoaded) return;
     
-    // Subtitle Sync
     if (subtitlesEnabled && parsedSubs.length > 0) {
       const currentMs = status.positionMillis;
       const activeCue = parsedSubs.find(c => currentMs >= c.startMs && currentMs <= c.endMs);
@@ -153,7 +214,6 @@ export default function Player({ route, navigation }) {
       setCurrentSubText('');
     }
 
-    // Progress Save
     const currentSecs = Math.floor(status.positionMillis / 1000);
     const durationSecs = Math.floor(status.durationMillis / 1000);
     
@@ -170,7 +230,7 @@ export default function Player({ route, navigation }) {
     }
   }, [status.positionMillis, subtitlesEnabled]);
 
-  // 4. UI Auto-Hide Engine
+  // 5. UI Auto-Hide Engine
   const resetHideTimer = () => {
     setShowUI(true);
     Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
@@ -192,7 +252,7 @@ export default function Player({ route, navigation }) {
     }
   }, [status.isPlaying, showSettings, showLogs]);
 
-  // 5. Gesture Engine (Double Tap to Skip)
+  // 6. Gesture Engine (Double Tap to Skip)
   const handleTouchOverlay = (evt) => {
     if (showSettings) { setShowSettings(false); return; }
     
@@ -259,12 +319,13 @@ export default function Player({ route, navigation }) {
   const toggleResizeMode = () => {
     const newMode = resizeMode === ResizeMode.CONTAIN ? ResizeMode.COVER : ResizeMode.CONTAIN;
     setResizeMode(newMode);
-    addLog(`Resize Mode changed to ${newMode}`);
+    addLog(`Resize Mode changed to ${newMode === ResizeMode.CONTAIN ? 'Contain' : 'Cover'}`);
     resetHideTimer();
   };
 
   const handleVideoError = (error) => {
     addLog(`VIDEO ENGINE FATAL ERROR: ${error}`, "ERROR");
+    setFatalError(error);
   };
 
   const formatTime = (millis) => {
@@ -276,11 +337,28 @@ export default function Player({ route, navigation }) {
     return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
   };
 
-  if (!proxiedUri) {
+  // INITIAL LOAD STATE
+  if (loadingStream) {
+    return (
+      <View style={styles.loaderContainerFull}>
+        <ActivityIndicator size="large" color={BRAND_RED} />
+        <Text style={styles.bufferText}>Connecting to Server...</Text>
+        <ScrollView style={styles.bootLogScroll}>
+          {logs.map((l, idx) => (
+            <Text key={idx} style={styles.bootLogText}>{l}</Text>
+          ))}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // ERROR STATE
+  if (fatalError || !proxiedUri) {
     return (
       <View style={styles.errorContainer}>
         <FontAwesome5 name="exclamation-triangle" size={40} color={BRAND_RED} style={{marginBottom: 15}} />
-        <Text style={styles.errorText}>Invalid Stream Data Payload</Text>
+        <Text style={styles.errorText}>Playback Halted</Text>
+        <Text style={styles.errorSubText}>{fatalError || "Failed to parse streaming manifest."}</Text>
         <TouchableOpacity style={styles.errorBtn} onPress={handleClosePlayer}>
           <Text style={styles.errorBtnText}>Go Back</Text>
         </TouchableOpacity>
@@ -291,7 +369,6 @@ export default function Player({ route, navigation }) {
   return (
     <View style={styles.container}>
       
-      {/* EXPO AV ENGINE */}
       <Video
         ref={videoRef}
         style={styles.videoPlayer}
@@ -310,14 +387,12 @@ export default function Player({ route, navigation }) {
         shouldPlay
       />
 
-      {/* CUSTOM VTT SUBTITLE OVERLAY */}
       {subtitlesEnabled && currentSubText !== '' && (
         <View style={styles.subtitleContainer} pointerEvents="none">
           <Text style={styles.subtitleText}>{currentSubText}</Text>
         </View>
       )}
 
-      {/* BUFFERING SPINNER */}
       {(!isReady || status.isBuffering) && (
         <View style={styles.loaderContainer}>
           <ActivityIndicator size="large" color={BRAND_RED} />
@@ -325,12 +400,10 @@ export default function Player({ route, navigation }) {
         </View>
       )}
 
-      {/* INVISIBLE GESTURE LAYER */}
       <TouchableWithoutFeedback onPress={handleTouchOverlay}>
         <View style={StyleSheet.absoluteFillObject} />
       </TouchableWithoutFeedback>
 
-      {/* DOUBLE TAP ANIMATIONS */}
       {showSkipIndicator === 'left' && (
         <View style={styles.skipLeftInd}>
           <FontAwesome5 name="backward" size={30} color="#FFF" />
@@ -344,7 +417,6 @@ export default function Player({ route, navigation }) {
         </View>
       )}
 
-      {/* LIVE DIAGNOSTICS TERMINAL */}
       {showLogs && (
         <View style={styles.logOverlay}>
           <View style={styles.logHeader}>
@@ -359,12 +431,7 @@ export default function Player({ route, navigation }) {
         </View>
       )}
 
-      {/* UI OVERLAY LAYER */}
-      <Animated.View 
-        style={[styles.uiLayer, { opacity: uiOpacity }]} 
-        pointerEvents={showUI ? 'auto' : 'none'}
-      >
-        {/* TOP BAR */}
+      <Animated.View style={[styles.uiLayer, { opacity: uiOpacity }]} pointerEvents={showUI ? 'auto' : 'none'}>
         <View style={styles.topBar}>
           <TouchableOpacity onPress={handleClosePlayer} style={styles.backBtn} hitSlop={{top:20, bottom:20, left:20, right:20}}>
             <FontAwesome5 name="arrow-left" size={20} color="#FFF" />
@@ -375,33 +442,27 @@ export default function Player({ route, navigation }) {
           </View>
         </View>
 
-        {/* CENTER PLAY/PAUSE */}
         <View style={styles.centerControls} pointerEvents="box-none">
           <TouchableOpacity onPress={togglePlayPause} style={styles.playPauseBtn} activeOpacity={0.8}>
             <FontAwesome5 name={status.isPlaying ? "pause" : "play"} size={34} color="#FFF" style={!status.isPlaying && {marginLeft: 6}} />
           </TouchableOpacity>
         </View>
 
-        {/* SETTINGS MENU OVERLAY */}
         {showSettings && (
           <View style={styles.settingsMenu}>
             <Text style={styles.settingsTitle}>Playback Settings</Text>
-            
             <TouchableOpacity style={styles.settingRow} onPress={changeSpeed}>
               <Text style={styles.settingLabel}><FontAwesome5 name="tachometer-alt"/> Speed</Text>
               <Text style={styles.settingValue}>{playbackSpeed}x</Text>
             </TouchableOpacity>
-            
             <TouchableOpacity style={styles.settingRow} onPress={toggleResizeMode}>
               <Text style={styles.settingLabel}><FontAwesome5 name="expand"/> Fit Video</Text>
               <Text style={styles.settingValue}>{resizeMode === ResizeMode.CONTAIN ? 'Contain' : 'Cover'}</Text>
             </TouchableOpacity>
-            
             <TouchableOpacity style={styles.settingRow} onPress={() => { setSubtitlesEnabled(!subtitlesEnabled); addLog(`Subtitles toggled ${!subtitlesEnabled}`); }}>
               <Text style={styles.settingLabel}><FontAwesome5 name="closed-captioning"/> Subtitles</Text>
               <Text style={styles.settingValue}>{subtitlesEnabled ? 'ON' : 'OFF'}</Text>
             </TouchableOpacity>
-
             <TouchableOpacity style={styles.settingRow} onPress={() => { setShowLogs(true); setShowSettings(false); }}>
               <Text style={styles.settingLabel}><FontAwesome5 name="bug"/> Show Debug Logs</Text>
               <FontAwesome5 name="chevron-right" color="#FFF" size={12}/>
@@ -409,11 +470,9 @@ export default function Player({ route, navigation }) {
           </View>
         )}
 
-        {/* BOTTOM BAR */}
         <View style={styles.bottomBar}>
           <View style={styles.progressBarRow}>
             <Text style={styles.timeText}>{formatTime(status.positionMillis || 0)}</Text>
-            
             <Slider
               style={styles.slider}
               minimumValue={0}
@@ -425,7 +484,6 @@ export default function Player({ route, navigation }) {
               onSlidingComplete={handleSliderValueChange}
               onSlidingStart={() => { if (hideUITimeout.current) clearTimeout(hideUITimeout.current); }}
             />
-            
             <Text style={styles.timeText}>{formatTime(status.durationMillis || 0)}</Text>
           </View>
           
@@ -434,13 +492,11 @@ export default function Player({ route, navigation }) {
               {parsedSubs.length > 0 && <Text style={styles.subsBadge}>{subtitlesEnabled ? 'ON' : 'OFF'}</Text>}
               <FontAwesome5 name="closed-captioning" size={20} color={subtitlesEnabled ? "#FFF" : "#666"} />
             </TouchableOpacity>
-            
             <TouchableOpacity style={styles.actionBtn} onPress={() => setShowSettings(!showSettings)}>
               <FontAwesome5 name="cog" size={20} color={showSettings ? BRAND_RED : "#FFF"} />
             </TouchableOpacity>
           </View>
         </View>
-
       </Animated.View>
     </View>
   );
@@ -449,11 +505,17 @@ export default function Player({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   videoPlayer: { ...StyleSheet.absoluteFillObject },
+  
+  loaderContainerFull: { flex: 1, backgroundColor: '#050505', justifyContent: 'center', alignItems: 'center' },
+  bootLogScroll: { marginTop: 20, maxHeight: 150, width: '80%', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 8, padding: 10 },
+  bootLogText: { color: '#4ADE80', fontFamily: 'monospace', fontSize: 9, marginBottom: 2 },
+  
   loaderContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 5, backgroundColor: 'rgba(0,0,0,0.4)' },
   bufferText: { color: BRAND_RED, marginTop: 10, fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1 },
   
   errorContainer: { flex: 1, backgroundColor: '#050505', justifyContent: 'center', alignItems: 'center' },
-  errorText: { color: '#FFF', fontSize: 16, fontWeight: 'bold', marginBottom: 20 },
+  errorText: { color: '#FFF', fontSize: 16, fontWeight: 'bold', marginBottom: 5 },
+  errorSubText: { color: '#EF4444', fontSize: 10, fontFamily: 'monospace', marginBottom: 20 },
   errorBtn: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 6 },
   errorBtnText: { color: '#FFF', fontWeight: 'bold' },
 
