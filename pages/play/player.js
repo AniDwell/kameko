@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+Import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, Animated, 
   Dimensions, ActivityIndicator, StatusBar, BackHandler,
@@ -8,20 +8,21 @@ import { Video, ResizeMode } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import Slider from '@react-native-community/slider';
 import firestore from '@react-native-firebase/firestore';
-import Svg, { Path, Circle, Rect, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
+import Svg, { Path, Circle, Rect, Defs, LinearGradient, Stop } from 'react-native-svg';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
 const TMDB_API_KEY = 'f39f02a34ded84924626dd5ec7de1f29';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
 // --- IN-MEMORY CACHE ---
 const tmdbCache = {
-  seriesQueries: new Map(),
-  seasonMaps: new Map(),
-  episodeData: new Map()
+  seriesQueries: new Map(),    // normalizedTitle -> { tmdbId, details }
+  seasonMaps: new Map(),       // tmdbId -> [{ seasonNumber, episodeCount, totalPrior }]
+  episodeData: new Map()       // `tmdb_episode_${tmdbId}_${season}_${episode}` -> epMetadata
 };
 
+// --- STRING MATCHING & NORMALIZATION ENGINE ---
 const cleanTitle = (str = '') => {
   return str
     .toLowerCase()
@@ -47,63 +48,15 @@ const calculateSimilarity = (s1, s2) => {
   return Math.min(1.0, jaccard + startsWithBonus);
 };
 
-// --- PREMIUM SVG ICONS ---
-const IconPlay = ({ size = 42, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-    <Path d="M8 5.14v13.72a1 1 0 001.5.86l11-6.86a1 1 0 000-1.72l-11-6.86A1 1 0 008 5.14z" />
-  </Svg>
-);
-
-const IconPause = ({ size = 42, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-    <Path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-  </Svg>
-);
-
-// Circular 10s Rewind Arrow
-const IconReplay10 = ({ size = 36, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M12 4a8 8 0 107.8 6.2" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
-    <Path d="M12 1.5L9 4.5l3 3" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    <SvgText x="12" y="15" fill={color} fontSize="6" fontWeight="bold" textAnchor="middle">10</SvgText>
-  </Svg>
-);
-
-// Circular 10s Forward Arrow
-const IconForward10 = ({ size = 36, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-    <Path d="M12 4a8 8 0 11-7.8 6.2" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
-    <Path d="M12 1.5l3 3-3 3" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    <SvgText x="12" y="15" fill={color} fontSize="6" fontWeight="bold" textAnchor="middle">10</SvgText>
-  </Svg>
-);
-
-const IconSettings = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
-    <Circle cx="12" cy="12" r="3"/>
-    <Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
-  </Svg>
-);
-
-const IconSubs = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
-    <Rect x="3" y="5" width="18" height="14" rx="2" ry="2"/>
-    <Path d="M7 15h3m4 0h3M7 9h10"/>
-  </Svg>
-);
-
-const IconSkip = ({ size = 22, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
-    <Path d="M5 4l10 8-10 8V4z"/>
-    <Path d="M19 5v14"/>
-  </Svg>
-);
-
-const IconBack = ({ size = 24, color = "#FFF" }) => (
-  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5">
-    <Path d="M19 12H5M12 19l-7-7 7-7"/>
-  </Svg>
-);
+// --- SVG ICONS ---
+const IconPlay = ({ size = 26, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M8 5v14l11-7z" /></Svg>);
+const IconPause = ({ size = 26, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></Svg>);
+const IconBackward = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" /></Svg>);
+const IconForward = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill={color}><Path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" /></Svg>);
+const IconSettings = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Circle cx="12" cy="12" r="3"/><Path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></Svg>);
+const IconSubs = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Rect x="3" y="5" width="18" height="14" rx="2" ry="2"/><Path d="M7 15h3m4 0h3M7 9h10"/></Svg>);
+const IconSkip = ({ size = 22, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Path d="M5 4l10 8-10 8V4z"/><Path d="M19 5v14"/></Svg>);
+const IconBack = ({ size = 24, color = "#FFF" }) => (<Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5"><Path d="M19 12H5M12 19l-7-7 7-7"/></Svg>);
 
 export default function Player({ route, navigation }) {
   const { 
@@ -118,16 +71,14 @@ export default function Player({ route, navigation }) {
   const videoRef = useRef(null);
   const uiOpacity = useRef(new Animated.Value(1)).current;
   const infoOverlayOpacity = useRef(new Animated.Value(0)).current;
-
-  // Double tap animation states
-  const skipLeftAnim = useRef(new Animated.Value(0)).current;
-  const skipRightAnim = useRef(new Animated.Value(0)).current;
-  const [doubleTapSide, setDoubleTapSide] = useState(null);
+  const skipIntroOpacity = useRef(new Animated.Value(0)).current;
 
   const [status, setStatus] = useState({});
+  const [isReady, setIsReady] = useState(false);
   const [showUI, setShowUI] = useState(true);
   const [resizeMode, setResizeMode] = useState(ResizeMode.CONTAIN);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const [showSkipIndicator, setShowSkipIndicator] = useState(null);
 
   // Settings & Subs Styling
   const [activeMenu, setActiveMenu] = useState(null);
@@ -141,6 +92,7 @@ export default function Player({ route, navigation }) {
   const [fatalError, setFatalError] = useState(null);
 
   // TMDB Metadata State
+  const [metaLoading, setMetaLoading] = useState(true);
   const [tmdbMeta, setTmdbMeta] = useState(null);
 
   // Gestures
@@ -148,7 +100,10 @@ export default function Player({ route, navigation }) {
   const [volume, setVolume] = useState(1.0); 
   const [gestureText, setGestureText] = useState(null);
 
-  // Subtitles
+  // Intro Skip & Subtitles
+  const [introData, setIntroData] = useState({ start: 0, end: 0 });
+  const [showSkipButton, setShowSkipButton] = useState(false);
+  const skipTimerRef = useRef(null);
   const [parsedSubs, setParsedSubs] = useState([]);
   const [currentSubText, setCurrentSubText] = useState('');
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
@@ -157,7 +112,7 @@ export default function Player({ route, navigation }) {
   const overlayTimerRef = useRef(null);
   const lastTapRef = useRef(0);
 
-  // 1. Force Landscape & Hardware Navigation
+  // --- 1. ORIENTATION & HARDWARE BACK ---
   useEffect(() => {
     async function lockOrientation() {
       try {
@@ -172,6 +127,7 @@ export default function Player({ route, navigation }) {
       ScreenOrientation.unlockAsync().catch(() => {});
       StatusBar.setHidden(false);
       backHandler.remove();
+      if (skipTimerRef.current) clearTimeout(skipTimerRef.current);
       if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
       if (hideUITimeout.current) clearTimeout(hideUITimeout.current);
     };
@@ -183,7 +139,7 @@ export default function Player({ route, navigation }) {
     return true;
   };
 
-  // 2. Netflix Overlay Fade Logic
+  // --- 2. NETFLIX OVERLAY FADE LOGIC ---
   const triggerNetflixOverlay = useCallback(() => {
     if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
     Animated.timing(infoOverlayOpacity, {
@@ -198,15 +154,16 @@ export default function Player({ route, navigation }) {
         duration: 500,
         useNativeDriver: true
       }).start();
-    }, 5500);
+    }, 6000);
   }, [infoOverlayOpacity]);
 
-  // 3. TMDB Search & Season Mapping
+  // --- 3. TMDB SEARCH, SCORING & SEASON MAPPING ENGINE ---
   useEffect(() => {
     let isCancelled = false;
 
     const fetchAndMapTMDB = async () => {
-      setTmdbMeta(null);
+      setMetaLoading(true);
+      setTmdbMeta(null); // Prevent stale state leak
 
       try {
         const queryNorm = cleanTitle(animeTitle);
@@ -218,8 +175,12 @@ export default function Player({ route, navigation }) {
           const sJson = await sRes.json();
           const results = sJson?.results || [];
 
-          if (results.length === 0) return;
+          if (results.length === 0) {
+            setMetaLoading(false);
+            return;
+          }
 
+          // Score results by similarity across English, Original, and Alternative titles
           let bestMatch = null;
           let highestScore = -1;
 
@@ -234,8 +195,12 @@ export default function Player({ route, navigation }) {
             }
           }
 
-          if (!bestMatch || highestScore < 0.25) return;
+          if (!bestMatch || highestScore < 0.25) {
+            setMetaLoading(false);
+            return;
+          }
 
+          // Fetch full series info with ratings
           const detailUrl = `https://api.themoviedb.org/3/tv/${bestMatch.id}?api_key=${TMDB_API_KEY}&append_to_response=content_ratings,alternative_titles`;
           const dRes = await fetch(detailUrl);
           seriesDetails = await dRes.json();
@@ -244,6 +209,7 @@ export default function Player({ route, navigation }) {
 
         if (isCancelled || !seriesDetails?.id) return;
 
+        // Build season distribution map (filtering out Season 0 specials)
         let seasonDistribution = tmdbCache.seasonMaps.get(seriesDetails.id);
         if (!seasonDistribution) {
           const validSeasons = (seriesDetails.seasons || [])
@@ -263,6 +229,7 @@ export default function Player({ route, navigation }) {
           tmdbCache.seasonMaps.set(seriesDetails.id, seasonDistribution);
         }
 
+        // Map global AniList episode number to TMDB { season, episode }
         const globalEp = parseInt(episodeNum, 10) || 1;
         let matchedSeason = 1;
         let matchedEpisode = globalEp;
@@ -277,12 +244,14 @@ export default function Player({ route, navigation }) {
           }
         }
 
+        // If AniList count overflows TMDB series (e.g. Sequel indexed separately on TMDB)
         if (!foundInMap && seasonDistribution.length > 0) {
           const lastSeason = seasonDistribution[seasonDistribution.length - 1];
           matchedSeason = lastSeason.seasonNumber;
           matchedEpisode = Math.max(1, globalEp - lastSeason.priorTotal);
         }
 
+        // Fetch Episode Specific Metadata
         const epCacheKey = `tmdb_episode_${seriesDetails.id}_${matchedSeason}_${matchedEpisode}`;
         let episodeInfo = tmdbCache.episodeData.get(epCacheKey);
 
@@ -297,10 +266,14 @@ export default function Player({ route, navigation }) {
 
         if (isCancelled) return;
 
+        // Content Rating calculation
         const ratings = seriesDetails.content_ratings?.results || [];
         const inRating = ratings.find(r => r.iso_3166_1 === 'IN')?.rating;
         const usRating = ratings.find(r => r.iso_3166_1 === 'US')?.rating;
-        const certification = inRating || usRating || ratings[0]?.rating || null;
+        const fallbackRating = ratings[0]?.rating || null;
+        const certification = inRating || usRating || fallbackRating;
+
+        // Series Genres
         const genres = (seriesDetails.genres || []).map(g => g.name).slice(0, 3).join(' • ');
 
         setTmdbMeta({
@@ -308,18 +281,23 @@ export default function Player({ route, navigation }) {
           episodeNumber: matchedEpisode,
           title: episodeInfo?.name || episodeTitle || `Episode ${episodeNum}`,
           overview: episodeInfo?.overview || seriesDetails.overview || '',
+          stillPath: episodeInfo?.still_path ? `https://image.tmdb.org/t/p/w500${episodeInfo.still_path}` : null,
           certification,
           genres
         });
         triggerNetflixOverlay();
-      } catch (_) {}
+      } catch (err) {
+        // Resilient fallback: playback proceeds smoothly on network/API failure
+      } finally {
+        if (!isCancelled) setMetaLoading(false);
+      }
     };
 
     fetchAndMapTMDB();
     return () => { isCancelled = true; };
   }, [animeTitle, episodeNum, triggerNetflixOverlay]);
 
-  // 4. Stream Resolution Engine
+  // --- 4. STREAM RESOLUTION ENGINE ---
   useEffect(() => {
     let isMounted = true;
 
@@ -355,6 +333,7 @@ export default function Player({ route, navigation }) {
         return;
       }
 
+      if (finalStreamData.intro) setIntroData(finalStreamData.intro);
       setStreamData(finalStreamData);
       setLoadingStream(false);
     };
@@ -363,7 +342,7 @@ export default function Player({ route, navigation }) {
     return () => { isMounted = false; };
   }, [animeId, episodeNum, targetType]);
 
-  // 5. VTT Subtitle Parser
+  // --- 5. VTT SUBTITLE PARSER ---
   useEffect(() => {
     if (!streamData?.subtitles || streamData.subtitles.length === 0) return;
 
@@ -386,7 +365,7 @@ export default function Player({ route, navigation }) {
             const parts = ts.split(':');
             let s = 0;
             if (parts.length === 3) s = parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2].replace(',', '.'));
-            else s = parseInt(parts[0], 10) * 60 + parseFloat(parts[2].replace(',', '.'));
+            else s = parseInt(parts[0], 10) * 60 + parseFloat(parts[1].replace(',', '.'));
             return s * 1000;
           };
 
@@ -401,7 +380,7 @@ export default function Player({ route, navigation }) {
     loadSubtitles();
   }, [streamData]);
 
-  // 6. Playback Tick
+  // --- 6. TICK (SUBS, SKIP INTRO, SYNC) ---
   useEffect(() => {
     if (!status.isLoaded) return;
     const currentMs = status.positionMillis || 0;
@@ -413,6 +392,24 @@ export default function Player({ route, navigation }) {
       else if (!activeCue && currentSubText !== '') setCurrentSubText('');
     } else if (currentSubText !== '') {
       setCurrentSubText('');
+    }
+
+    if (introData.end > 0 && currentSecs >= introData.start && currentSecs < introData.end) {
+      if (!showSkipButton && !skipTimerRef.current) {
+        setShowSkipButton(true);
+        Animated.timing(skipIntroOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+        skipTimerRef.current = setTimeout(() => {
+          Animated.timing(skipIntroOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
+            setShowSkipButton(false);
+          });
+        }, 6000);
+      }
+    } else if (showSkipButton) {
+      Animated.timing(skipIntroOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => setShowSkipButton(false));
+      if (skipTimerRef.current) {
+        clearTimeout(skipTimerRef.current);
+        skipTimerRef.current = null;
+      }
     }
 
     const durationSecs = Math.floor((status.durationMillis || 1) / 1000);
@@ -429,7 +426,7 @@ export default function Player({ route, navigation }) {
     }
   }, [status.positionMillis, subtitlesEnabled]);
 
-  // 7. Swipe Gestures
+  // --- 7. SWIPE GESTURES ---
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 15,
@@ -448,9 +445,7 @@ export default function Player({ route, navigation }) {
           setVolume(prev => {
             let next = prev - (dy * 0.005);
             next = Math.max(0, Math.min(next, 2.0));
-            if (videoRef.current) {
-              videoRef.current.setVolumeAsync(Math.min(next, 1.0));
-            }
+            if (videoRef.current) videoRef.current.setVolumeAsync(Math.min(next, 1.0));
             setGestureText(`Volume ${Math.round(next * 100)}%`);
             return next;
           });
@@ -460,7 +455,7 @@ export default function Player({ route, navigation }) {
     })
   ).current;
 
-  // 8. Controls Visibility & Double-Tap Trigger
+  // --- 8. UI VISIBILITY ENGINE ---
   const showControls = () => {
     setShowUI(true);
     Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
@@ -487,25 +482,6 @@ export default function Player({ route, navigation }) {
     }, 4500);
   };
 
-  const triggerDoubleTapAnimation = (side) => {
-    setDoubleTapSide(side);
-    const anim = side === 'left' ? skipLeftAnim : skipRightAnim;
-    anim.setValue(0);
-    Animated.sequence([
-      Animated.spring(anim, {
-        toValue: 1,
-        friction: 4,
-        tension: 80,
-        useNativeDriver: true
-      }),
-      Animated.timing(anim, {
-        toValue: 0,
-        duration: 250,
-        useNativeDriver: true
-      })
-    ]).start(() => setDoubleTapSide(null));
-  };
-
   const handleTouchOverlay = (evt) => {
     const now = Date.now();
     const tapDelay = now - lastTapRef.current;
@@ -516,17 +492,22 @@ export default function Player({ route, navigation }) {
       const touchX = evt.nativeEvent.locationX;
       if (touchX > Dimensions.get('window').width / 2) {
         seekForward();
-        triggerDoubleTapAnimation('right');
+        triggerSkipIndicator('right');
       } else {
         seekBackward();
-        triggerDoubleTapAnimation('left');
+        triggerSkipIndicator('left');
       }
     } else {
       toggleControls();
     }
   };
 
-  // Playback Operations
+  const triggerSkipIndicator = (direction) => {
+    setShowSkipIndicator(direction);
+    setTimeout(() => setShowSkipIndicator(null), 600);
+  };
+
+  // --- PLAYBACK DISPATCHERS ---
   const togglePlayPause = () => {
     if (!videoRef.current) return;
     status.isPlaying ? videoRef.current.pauseAsync() : videoRef.current.playAsync();
@@ -559,25 +540,6 @@ export default function Player({ route, navigation }) {
     const s = (totalSecs % 60).toString().padStart(2, '0');
     return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
   };
-
-  // Rotation interpolations for double tap
-  const leftRotate = skipLeftAnim.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: ['0deg', '-35deg', '0deg']
-  });
-  const leftScale = skipLeftAnim.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [0.8, 1.25, 1]
-  });
-
-  const rightRotate = skipRightAnim.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: ['0deg', '35deg', '0deg']
-  });
-  const rightScale = skipRightAnim.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [0.8, 1.25, 1]
-  });
 
   if (loadingStream) {
     return (
@@ -642,8 +604,8 @@ export default function Player({ route, navigation }) {
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject}>
             <Defs>
               <LinearGradient id="infoGrad" x1="0" y1="0" x2="1" y2="1">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.8" />
-                <Stop offset="0.5" stopColor="#000000" stopOpacity="0.35" />
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
+                <Stop offset="0.6" stopColor="#000000" stopOpacity="0.45" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
@@ -677,57 +639,57 @@ export default function Player({ route, navigation }) {
         </View>
       )}
 
-      {/* 6. GESTURE TOAST */}
+      {/* 6. GESTURE TOAST NOTIFICATION */}
       {gestureText && (
         <View style={styles.gestureIndicator} pointerEvents="none">
           <Text style={styles.gestureText}>{gestureText}</Text>
         </View>
       )}
 
-      {/* 7. TOUCH / PAN SENSOR */}
+      {/* 7. PAN RESPONDER & DOUBLE-TAP TOUCH SENSOR */}
       <View {...panResponder.panHandlers} style={[StyleSheet.absoluteFillObject, { zIndex: 5 }]}>
         <TouchableWithoutFeedback onPress={handleTouchOverlay}>
           <View style={StyleSheet.absoluteFillObject} />
         </TouchableWithoutFeedback>
       </View>
 
-      {/* 8. ANIMATED DOUBLE-TAP ROTATING OVERLAYS */}
-      {doubleTapSide === 'left' && (
-        <Animated.View 
-          style={[
-            styles.skipOverlayLeft, 
-            { opacity: skipLeftAnim, transform: [{ rotate: leftRotate }, { scale: leftScale }] }
-          ]} 
-          pointerEvents="none"
-        >
-          <IconReplay10 size={54} color="#FFF" />
-          <Text style={styles.skipFeedbackText}>-10s</Text>
+      {/* 8. SKIP SEEK TOASTS */}
+      {showSkipIndicator === 'left' && (
+        <View style={styles.skipLeftInd} pointerEvents="none">
+          <IconBackward size={32} color="#FFF" />
+          <Text style={styles.skipText}>-10s</Text>
+        </View>
+      )}
+      {showSkipIndicator === 'right' && (
+        <View style={styles.skipRightInd} pointerEvents="none">
+          <IconForward size={32} color="#FFF" />
+          <Text style={styles.skipText}>+10s</Text>
+        </View>
+      )}
+
+      {/* 9. FLOATING SKIP INTRO BUTTON */}
+      {showSkipButton && (
+        <Animated.View style={[styles.skipIntroFloat, { opacity: skipIntroOpacity }]}>
+          <TouchableOpacity 
+            onPress={() => videoRef.current?.setPositionAsync(introData.end * 1000)} 
+            style={styles.skipIntroBtnInner}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.skipIntroText}>Skip Intro</Text>
+            <IconForward size={14} color="#000" />
+          </TouchableOpacity>
         </Animated.View>
       )}
 
-      {doubleTapSide === 'right' && (
-        <Animated.View 
-          style={[
-            styles.skipOverlayRight, 
-            { opacity: skipRightAnim, transform: [{ rotate: rightRotate }, { scale: rightScale }] }
-          ]} 
-          pointerEvents="none"
-        >
-          <IconForward10 size={54} color="#FFF" />
-          <Text style={styles.skipFeedbackText}>+10s</Text>
-        </Animated.View>
-      )}
-
-      {/* 9. CONTROLS OVERLAY (SEAMLESS GRADIENTS) */}
+      {/* 10. GRADIENT CONTROLS OVERLAY */}
       <Animated.View style={[styles.uiLayer, { opacity: uiOpacity }]} pointerEvents={showUI ? 'auto' : 'none'}>
         
-        {/* TOP BAR WITH SMOOTH GRADIENT */}
+        {/* TOP BAR WITH GRADIENT */}
         <View style={styles.topBar}>
-          <Svg height={110} width="100%" style={styles.topGradientSvg} pointerEvents="none">
+          <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
               <LinearGradient id="topG" x1="0" y1="0" x2="0" y2="1">
                 <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
-                <Stop offset="0.5" stopColor="#000000" stopOpacity="0.45" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
@@ -744,18 +706,18 @@ export default function Player({ route, navigation }) {
           </View>
         </View>
 
-        {/* CENTER CONTROLS (SOFT SHADOWS, LARGER ICONS) */}
+        {/* CENTER PLAY/PAUSE */}
         <View style={styles.centerControls} pointerEvents="box-none">
-          <TouchableOpacity onPress={seekBackward} style={styles.centerActionBtn} activeOpacity={0.7}>
-            <IconReplay10 size={40} color="#FFF" />
+          <TouchableOpacity onPress={seekBackward} style={styles.skipCircleBtn} activeOpacity={0.7}>
+            <IconBackward size={28} color="#FFF" />
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={togglePlayPause} style={styles.centerPlayPauseBtn} activeOpacity={0.75}>
-            {status.isPlaying ? <IconPause size={48} color="#FFF" /> : <IconPlay size={48} color="#FFF" />}
+          <TouchableOpacity onPress={togglePlayPause} style={styles.playPauseBtn} activeOpacity={0.8}>
+            {status.isPlaying ? <IconPause size={34} color="#FFF" /> : <IconPlay size={34} color="#FFF" />}
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={seekForward} style={styles.centerActionBtn} activeOpacity={0.7}>
-            <IconForward10 size={40} color="#FFF" />
+          <TouchableOpacity onPress={seekForward} style={styles.skipCircleBtn} activeOpacity={0.7}>
+            <IconForward size={28} color="#FFF" />
           </TouchableOpacity>
         </View>
 
@@ -822,53 +784,58 @@ export default function Player({ route, navigation }) {
           </View>
         )}
 
-        {/* BOTTOM CONTROLS WITH EXTENDED SEAMLESS MULTI-STOP GRADIENT */}
-        <View style={styles.bottomBarContainer}>
-          <Svg height={160} width="100%" style={styles.bottomGradientSvg} pointerEvents="none">
+        {/* BOTTOM CONTROLS WITH GRADIENT */}
+        <View style={styles.bottomBar}>
+          <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
-              <LinearGradient id="botSeamlessG" x1="0" y1="1" x2="0" y2="0">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.92" />
-                <Stop offset="0.35" stopColor="#000000" stopOpacity="0.65" />
-                <Stop offset="0.7" stopColor="#000000" stopOpacity="0.25" />
+              <LinearGradient id="botG" x1="0" y1="1" x2="0" y2="0">
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill="url(#botSeamlessG)" />
+            <Rect width="100%" height="100%" fill="url(#botG)" />
           </Svg>
 
-          <View style={styles.bottomControlsContent}>
-            <View style={styles.progressBarRow}>
-              <Text style={styles.timeText}>{formatTime(status.positionMillis || 0)}</Text>
-              <Slider
-                style={styles.slider}
-                minimumValue={0}
-                maximumValue={status.durationMillis || 100}
-                value={status.positionMillis || 0}
-                minimumTrackTintColor={BRAND_RED}
-                maximumTrackTintColor="rgba(255,255,255,0.25)"
-                thumbTintColor={BRAND_RED}
-                onSlidingComplete={handleSliderChange}
-                onSlidingStart={() => { if (hideUITimeout.current) clearTimeout(hideUITimeout.current); }}
-              />
-              <Text style={styles.timeText}>{formatTime(status.durationMillis || 0)}</Text>
+          <View style={styles.progressBarRow}>
+            <Text style={styles.timeText}>{formatTime(status.positionMillis || 0)}</Text>
+            <Slider
+              style={styles.slider}
+              minimumValue={0}
+              maximumValue={status.durationMillis || 100}
+              value={status.positionMillis || 0}
+              minimumTrackTintColor={BRAND_RED}
+              maximumTrackTintColor="rgba(255,255,255,0.25)"
+              thumbTintColor={BRAND_RED}
+              onSlidingComplete={handleSliderChange}
+              onSlidingStart={() => { if (hideUITimeout.current) clearTimeout(hideUITimeout.current); }}
+            />
+            <Text style={styles.timeText}>{formatTime(status.durationMillis || 0)}</Text>
+          </View>
+
+          <View style={styles.actionRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+              <TouchableOpacity onPress={() => setSubtitlesEnabled(!subtitlesEnabled)}>
+                <IconSubs size={22} color={subtitlesEnabled ? "#FFF" : "#666"} />
+              </TouchableOpacity>
             </View>
 
-            <View style={styles.actionRow}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 20 }}>
-                <TouchableOpacity onPress={() => setSubtitlesEnabled(!subtitlesEnabled)} style={styles.iconHitSlop}>
-                  <IconSubs size={22} color={subtitlesEnabled ? "#FFF" : "#666"} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18 }}>
+              {introData.end > 0 && (
+                <TouchableOpacity 
+                  onPress={() => videoRef.current?.setPositionAsync(introData.end * 1000)}
+                  style={styles.miniSkipBtn}
+                >
+                  <Text style={styles.miniSkipText}>Skip Intro</Text>
                 </TouchableOpacity>
-              </View>
+              )}
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 24 }}>
-                <TouchableOpacity onPress={() => {/* Next episode navigation hook */}} style={styles.iconHitSlop}>
-                  <IconSkip size={20} color="#FFF" />
-                </TouchableOpacity>
+              <TouchableOpacity onPress={() => {/* Next episode navigation hook */}}>
+                <IconSkip size={20} color="#FFF" />
+              </TouchableOpacity>
 
-                <TouchableOpacity onPress={() => setActiveMenu(activeMenu ? null : 'main')} style={styles.iconHitSlop}>
-                  <IconSettings size={22} color={activeMenu ? BRAND_RED : "#FFF"} />
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity onPress={() => setActiveMenu(activeMenu ? null : 'main')}>
+                <IconSettings size={22} color={activeMenu ? BRAND_RED : "#FFF"} />
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -892,7 +859,7 @@ const styles = StyleSheet.create({
   subtitleContainer: { position: 'absolute', width: '100%', alignItems: 'center', zIndex: 9, paddingHorizontal: 30 },
   subtitleText: { fontWeight: '900', textAlign: 'center', textShadowColor: '#000', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
 
-  // Netflix Overlay
+  // Netflix Information Overlay
   netflixOverlayWrapper: {
     position: 'absolute',
     top: 75,
@@ -908,82 +875,35 @@ const styles = StyleSheet.create({
   certBadge: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1 },
   certBadgeText: { color: '#FFF', fontSize: 9, fontWeight: 'bold' },
   genreTags: { color: '#CCC', fontSize: 10, fontWeight: '600' },
-  metaEpisodeHeader: { color: '#FFF', fontSize: 14, fontWeight: 'bold', marginVertical: 4, textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 4 },
-  metaDescription: { color: '#BBB', fontSize: 10, lineHeight: 14, textShadowColor: 'rgba(0,0,0,0.8)', textShadowRadius: 3 },
+  metaEpisodeHeader: { color: '#FFF', fontSize: 14, fontWeight: 'bold', marginVertical: 4 },
+  metaDescription: { color: '#BBB', fontSize: 10, lineHeight: 14 },
 
-  // Double Tap Indicators
-  skipOverlayLeft: {
-    position: 'absolute',
-    left: '18%',
-    top: '40%',
-    alignItems: 'center',
-    zIndex: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.9,
-    shadowRadius: 10,
-    elevation: 8
-  },
-  skipOverlayRight: {
-    position: 'absolute',
-    right: '18%',
-    top: '40%',
-    alignItems: 'center',
-    zIndex: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.9,
-    shadowRadius: 10,
-    elevation: 8
-  },
-  skipFeedbackText: { color: '#FFF', fontSize: 14, fontWeight: '900', marginTop: 4, textShadowColor: '#000', textShadowRadius: 4 },
-
-  // UI Layer
+  // Controls Layer
   uiLayer: { ...StyleSheet.absoluteFillObject, zIndex: 10, justifyContent: 'space-between' },
-
-  // Top Bar
   topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 25, paddingTop: 20, paddingBottom: 25, width: '100%' },
-  topGradientSvg: { position: 'absolute', top: 0, left: 0, right: 0 },
   backBtn: { marginRight: 18 },
-  animeTitle: { color: '#FFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.3, textShadowColor: '#000', textShadowRadius: 4 },
-  episodeTitle: { color: '#AAA', fontSize: 11, fontWeight: '600', marginTop: 2, textShadowColor: '#000', textShadowRadius: 3 },
+  animeTitle: { color: '#FFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.3 },
+  episodeTitle: { color: '#AAA', fontSize: 11, fontWeight: '600', marginTop: 2 },
 
-  // Center Controls (Soft Shadows)
-  centerControls: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 50 },
-  centerPlayPauseBtn: {
-    width: 74,
-    height: 74,
-    borderRadius: 37,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.85,
-    shadowRadius: 12,
-    elevation: 8
-  },
-  centerActionBtn: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(0,0,0,0.25)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.8,
-    shadowRadius: 8,
-    elevation: 5
-  },
+  centerControls: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 40 },
+  playPauseBtn: { width: 68, height: 68, borderRadius: 34, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)' },
+  skipCircleBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
 
-  // Settings Menu
-  settingsMenu: { position: 'absolute', bottom: 95, right: 25, backgroundColor: 'rgba(18,18,18,0.96)', borderRadius: 12, padding: 18, width: 260, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  skipLeftInd: { position: 'absolute', left: '16%', top: '44%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 18, borderRadius: 45 },
+  skipRightInd: { position: 'absolute', right: '16%', top: '44%', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.6)', padding: 18, borderRadius: 45 },
+  skipText: { color: '#FFF', fontSize: 12, fontWeight: 'bold', marginTop: 4 },
+
+  skipIntroFloat: { position: 'absolute', bottom: 100, right: 30, zIndex: 30 },
+  skipIntroBtnInner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 6, gap: 5 },
+  skipIntroText: { color: '#000', fontWeight: '900', fontSize: 11, textTransform: 'uppercase' },
+
+  settingsMenu: { position: 'absolute', bottom: 85, right: 25, backgroundColor: 'rgba(18,18,18,0.96)', borderRadius: 12, padding: 18, width: 260, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   menuHeader: { color: '#FFF', fontSize: 15, fontWeight: 'bold', marginBottom: 12 },
   menuRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.06)' },
   menuText: { color: '#DDD', fontSize: 13, fontWeight: '600' },
   menuValue: { color: BRAND_RED, fontSize: 12, fontWeight: 'bold' },
   backMenuText: { color: BRAND_RED, fontSize: 13, fontWeight: 'bold' },
+
   subMenuLabel: { color: '#777', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 6 },
   colorDot: { width: 22, height: 22, borderRadius: 11 },
   colorDotActive: { borderWidth: 2, borderColor: '#FFF' },
@@ -991,13 +911,18 @@ const styles = StyleSheet.create({
   stylePillActive: { borderColor: BRAND_RED, borderWidth: 1 },
   stylePillText: { color: '#FFF', fontSize: 11, fontWeight: 'bold' },
 
-  // Bottom Controls (Extended Seamless Gradient)
-  bottomBarContainer: { width: '100%', position: 'relative', justifyContent: 'flex-end' },
-  bottomGradientSvg: { position: 'absolute', bottom: 0, left: 0, right: 0 },
-  bottomControlsContent: { paddingHorizontal: 25, paddingBottom: 22, paddingTop: 10 },
-  progressBarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  timeText: { color: '#FFF', fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'], textShadowColor: '#000', textShadowRadius: 3 },
+  bottomBar: { width: '100%', paddingHorizontal: 25, paddingBottom: 20, paddingTop: 25 },
+  progressBarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  timeText: { color: '#FFF', fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] },
   slider: { flex: 1, marginHorizontal: 10, height: 35 },
   actionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 4 },
-  iconHitSlop: { padding: 4 }
+
+  miniSkipBtn: { backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
+  miniSkipText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
+
+  errorContainer: { flex: 1, backgroundColor: '#050505', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
+  errorTitle: { color: '#FFF', fontSize: 16, fontWeight: 'bold', marginBottom: 4 },
+  errorSub: { color: BRAND_RED, fontSize: 11, textAlign: 'center', marginBottom: 20 },
+  errorBtn: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 18, paddingVertical: 8, borderRadius: 6 },
+  errorBtnText: { color: '#FFF', fontWeight: 'bold' }
 });
