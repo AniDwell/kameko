@@ -5,7 +5,6 @@ import {
   TouchableWithoutFeedback
 } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
-import * as ScreenOrientation from 'expo-screen-orientation';
 import { FontAwesome5 } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import firestore from '@react-native-firebase/firestore';
@@ -46,25 +45,18 @@ export default function Player({ route, navigation }) {
     ? `${CUSTOM_PROXY_URL}${encodeURIComponent(streamUrl)}&referer=${encodeURIComponent(referer)}`
     : null;
 
-  // 2. Hardware Landscape Lock
+  // 2. Hardware Back & Status Bar Handling (Orientation Lock Removed)
   useEffect(() => {
-    async function lockScreen() {
-      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-      StatusBar.setHidden(true);
-    }
-    lockScreen();
-
+    StatusBar.setHidden(true);
     const backHandler = BackHandler.addEventListener('hardwareBackPress', handleClosePlayer);
 
     return () => {
-      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
       StatusBar.setHidden(false);
       backHandler.remove();
     };
   }, []);
 
   const handleClosePlayer = async () => {
-    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
     navigation.goBack();
     return true;
   };
