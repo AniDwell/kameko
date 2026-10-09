@@ -102,7 +102,16 @@ export default function Player({ route, navigation }) {
   const hideUITimeout = useRef(null);
   const longPressTimerRef = useRef(null);
 
-  // 1. Full Screen Lock (Behind Camera Notch & Persistent Landscape)
+  // REFS TO PREVENT ORIENTATION FLICKER
+  // We use refs to read state inside the hardware back handler 
+  // so the useEffect doesn't need to re-run on menu changes.
+  const activeMenuRef = useRef(activeMenu);
+  const isLockedRef = useRef(isLocked);
+
+  useEffect(() => { activeMenuRef.current = activeMenu; }, [activeMenu]);
+  useEffect(() => { isLockedRef.current = isLocked; }, [isLocked]);
+
+  // 1. Strict One-Time Landscape Lock (Flicker Fix)
   useEffect(() => {
     let isMounted = true;
     const lockEdgeToEdge = async () => {
@@ -119,11 +128,11 @@ export default function Player({ route, navigation }) {
     lockEdgeToEdge();
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (activeMenu) { 
+      if (activeMenuRef.current) { 
         setActiveMenu(null); 
         return true; 
       }
-      if (isLocked) { 
+      if (isLockedRef.current) { 
         setIsLocked(false); 
         setShowUI(true);
         Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
@@ -142,7 +151,7 @@ export default function Player({ route, navigation }) {
       }
       backHandler.remove();
     };
-  }, [activeMenu, isLocked]);
+  }, []); // <--- Empty dependency array ensures this runs exactly ONCE on mount
 
   // 2. Query Next Episode Availability
   useEffect(() => {
