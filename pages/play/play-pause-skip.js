@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, 
   Animated, Dimensions, TouchableWithoutFeedback 
@@ -7,7 +7,7 @@ import Svg, { Path } from 'react-native-svg';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-// --- SVG ICONS MATCHING WEB PLAYER ---
+// --- SVG ICONS WITH SOFT DROP SHADOWS ---
 const IconPlay = ({ size = 64 }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="#FFFFFF">
     <Path d="M8 5v14l11-7z" />
@@ -20,20 +20,20 @@ const IconPause = ({ size = 64 }) => (
   </Svg>
 );
 
-const IconBackward = ({ size = 40 }) => (
+const IconBackward = ({ size = 42 }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="#FFFFFF">
     <Path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
   </Svg>
 );
 
-const IconForward = ({ size = 40 }) => (
+const IconForward = ({ size = 42 }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="#FFFFFF">
     <Path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z" />
   </Svg>
 );
 
 export default function PlayPauseSkip({
-  status,
+  status = {},
   videoRef,
   resetHideTimer,
   isLocked,
@@ -42,27 +42,54 @@ export default function PlayPauseSkip({
   setShowUI,
   activeMenu,
   setActiveMenu,
+  onTouchStart,
+  onTouchEnd,
   panHandlers = {}
 }) {
   const [skipDirection, setSkipDirection] = useState(null);
 
-  // Animation values for web-matching skip effects
+  // Animations for Skip Effects
   const leftAnim = useRef(new Animated.Value(0)).current;
   const rightAnim = useRef(new Animated.Value(0)).current;
   const rotateLeft = useRef(new Animated.Value(0)).current;
   const rotateRight = useRef(new Animated.Value(0)).current;
 
+  // Animation for Center Buffer Spinner
+  const spinValue = useRef(new Animated.Value(0)).current;
+  const spinAnimation = useRef(null);
+
   const lastTapRef = useRef(0);
   const singleTapTimer = useRef(null);
 
+  const isBuffering = status.isBuffering || (!status.isLoaded && !status.error);
+
+  // Continuous rotation while video buffers
+  useEffect(() => {
+    if (isBuffering) {
+      spinAnimation.current = Animated.loop(
+        Animated.timing(spinValue, {
+          toValue: 1,
+          duration: 900,
+          useNativeDriver: true,
+        })
+      );
+      spinAnimation.current.start();
+    } else {
+      if (spinAnimation.current) {
+        spinAnimation.current.stop();
+      }
+      spinValue.setValue(0);
+    }
+  }, [isBuffering]);
+
   const togglePlayPause = () => {
-    if (!videoRef?.current) return;
+    if (!videoRef?.current || isBuffering) return;
     if (status.isPlaying) {
       videoRef.current.pauseAsync();
     } else {
       videoRef.current.playAsync();
     }
-    resetHideTimer();
+    if (resetHideTimer) resetHideTimer();
   };
 
   const seekBy = async (seconds) => {
@@ -71,7 +98,7 @@ export default function PlayPauseSkip({
     const durationMs = status.durationMillis || 0;
     const targetMs = Math.max(0, Math.min(durationMs, currentMs + seconds * 1000));
     await videoRef.current.setPositionAsync(targetMs);
-    resetHideTimer();
+    if (resetHideTimer) resetHideTimer();
   };
 
   const triggerLeftAnimation = () => {
@@ -128,7 +155,6 @@ export default function PlayPauseSkip({
     const rightThreshold = width * 0.65;
 
     if (tapDelay < 300) {
-      // Cancel pending single-tap toggle
       if (singleTapTimer.current) {
         clearTimeout(singleTapTimer.current);
         singleTapTimer.current = null;
@@ -137,34 +163,29 @@ export default function PlayPauseSkip({
       if (isLocked) return;
 
       if (touchX < leftThreshold) {
-        // Double-tap left zone -> -10s
         seekBy(-10);
         triggerLeftAnimation();
       } else if (touchX > rightThreshold) {
-        // Double-tap right zone -> +10s
         seekBy(10);
         triggerRightAnimation();
       } else {
-        // Double-tap center zone -> Toggle Play/Pause
         togglePlayPause();
       }
     } else {
-      // Single-tap: Toggle UI overlay with a brief debounce
       singleTapTimer.current = setTimeout(() => {
         if (showUI) {
           Animated.timing(uiOpacity, {
             toValue: 0,
             duration: 250,
             useNativeDriver: true,
-          }).start(() => setShowUI(false));
+          }).start(() => setShowUI && setShowUI(false));
         } else {
-          resetHideTimer();
+          if (resetHideTimer) resetHideTimer();
         }
       }, 280);
     }
   };
 
-  // Rotation interpolations
   const spinBwd = rotateLeft.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '-360deg'],
@@ -175,20 +196,29 @@ export default function PlayPauseSkip({
     outputRange: ['0deg', '360deg'],
   });
 
+  const bufferRotation = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
   return (
     <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
-      {/* FULLSCREEN TOUCH GESTURE LAYER */}
+      {/* GESTURE TOUCH LAYER (DOUBLE TAP + LONG PRESS 2X) */}
       <View {...panHandlers} style={StyleSheet.absoluteFillObject}>
-        <TouchableWithoutFeedback onPress={handleTouch}>
+        <TouchableWithoutFeedback 
+          onPress={handleTouch}
+          onPressIn={onTouchStart}
+          onPressOut={onTouchEnd}
+        >
           <View style={StyleSheet.absoluteFillObject} />
         </TouchableWithoutFeedback>
       </View>
 
-      {/* WEB-MATCHING SKIP ANIMATIONS */}
+      {/* SKIP ANIMATIONS (-10s / +10s) */}
       {skipDirection === 'left' && !isLocked && (
         <View style={styles.skipLeftZone} pointerEvents="none">
           <Animated.View style={{ transform: [{ rotate: spinBwd }] }}>
-            <IconBackward size={44} />
+            <IconBackward size={48} />
           </Animated.View>
           <Animated.Text
             style={[
@@ -217,7 +247,7 @@ export default function PlayPauseSkip({
       {skipDirection === 'right' && !isLocked && (
         <View style={styles.skipRightZone} pointerEvents="none">
           <Animated.View style={{ transform: [{ rotate: spinFwd }] }}>
-            <IconForward size={44} />
+            <IconForward size={48} />
           </Animated.View>
           <Animated.Text
             style={[
@@ -243,43 +273,55 @@ export default function PlayPauseSkip({
         </View>
       )}
 
-      {/* CENTER PLAY/PAUSE/SKIP CONTROLS (WHEN UI IS ACTIVE) */}
+      {/* CENTER PLAY/PAUSE/SPINNER CONTROLS */}
       {!isLocked && (
         <Animated.View
           style={[styles.centerControls, { opacity: uiOpacity }]}
           pointerEvents={showUI ? 'box-none' : 'none'}
         >
-          {/* Skip Back Button */}
+          {/* Skip Backward 10s */}
           <TouchableOpacity
-            style={styles.skipBtn}
+            style={styles.actionBtn}
             activeOpacity={0.75}
             onPress={() => {
               seekBy(-10);
               triggerLeftAnimation();
             }}
           >
-            <IconBackward size={38} />
+            <IconBackward size={42} />
           </TouchableOpacity>
 
-          {/* Center Play/Pause Button */}
+          {/* Center Dynamic Play / Pause / Spinner */}
           <TouchableOpacity
-            style={styles.playPauseBtn}
-            activeOpacity={0.85}
+            style={styles.centerBtn}
+            activeOpacity={0.8}
             onPress={togglePlayPause}
+            disabled={isBuffering}
           >
-            {status.isPlaying ? <IconPause size={56} /> : <IconPlay size={56} />}
+            {isBuffering ? (
+              <Animated.View 
+                style={[
+                  styles.spinnerRing, 
+                  { transform: [{ rotate: bufferRotation }] }
+                ]} 
+              />
+            ) : status.isPlaying ? (
+              <IconPause size={68} />
+            ) : (
+              <IconPlay size={68} />
+            )}
           </TouchableOpacity>
 
-          {/* Skip Forward Button */}
+          {/* Skip Forward 10s */}
           <TouchableOpacity
-            style={styles.skipBtn}
+            style={styles.actionBtn}
             activeOpacity={0.75}
             onPress={() => {
               seekBy(10);
               triggerRightAnimation();
             }}
           >
-            <IconForward size={38} />
+            <IconForward size={42} />
           </TouchableOpacity>
         </Animated.View>
       )}
@@ -293,26 +335,44 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 48,
+    gap: 64,
     zIndex: 15,
   },
-  playPauseBtn: {
+  centerBtn: {
     width: 72,
     height: 72,
-    borderRadius: 36,
-    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.2)',
+    // Soft ambient glow / drop shadow instead of a solid pill
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.6,
+    shadowRadius: 10,
+    elevation: 8,
   },
-  skipBtn: {
+  actionBtn: {
+    width: 52,
+    height: 52,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  spinnerRing: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderWidth: 3.5,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    borderTopColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+    elevation: 6,
   },
   skipLeftZone: {
     position: 'absolute',
@@ -335,8 +395,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     marginTop: 6,
-    textShadowColor: 'rgba(0,0,0,0.9)',
+    textShadowColor: 'rgba(0,0,0,0.85)',
     textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
+    textShadowRadius: 6,
   },
 });
