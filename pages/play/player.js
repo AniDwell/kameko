@@ -1,22 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, Animated, 
-  Dimensions, StatusBar, BackHandler,
-  TouchableWithoutFeedback, PanResponder
+  Dimensions, StatusBar, BackHandler
 } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as NavigationBar from 'expo-navigation-bar';
-import * as Brightness from 'expo-brightness';
 import Slider from '@react-native-community/slider';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Path, Rect, Defs, LinearGradient, Stop } from 'react-native-svg';
-
-// Volume Manager fallback handling
-let VolumeManager = null;
-try {
-  VolumeManager = require('react-native-volume-manager').VolumeManager;
-} catch (_) {}
 
 // Modular Component Imports
 import AspectRatioButton from './aspect-ratio';
@@ -24,6 +16,7 @@ import LockButton from './lock';
 import VideoQualitySheet from './video_quality';
 import SubtitleSheet from './subtitle';
 import AudioSheet from './audio';
+import SpeedSheet from './speed';
 import SkipIntroOutro from './intro-outro';
 import PlayPauseSkip from './play-pause-skip';
 
@@ -31,7 +24,7 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
-// Top Bar Icons
+// Top and Bottom Bar Icons
 const IconBack = ({ size = 28 }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5">
     <Path d="M19 12H5M12 19l-7-7 7-7" />
@@ -47,6 +40,11 @@ const IconAudio = ({ size = 24, color = "#FFF" }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
     <Path d="M3 18v-6a9 9 0 0118 0v6"/>
     <Path d="M21 19a2 2 0 01-2 2h-1v-6h3v4zM3 19a2 2 0 002 2h1v-6H3v4z"/>
+  </Svg>
+);
+const IconNextEp = ({ size = 22, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
   </Svg>
 );
 
@@ -65,7 +63,7 @@ export default function Player({ route, navigation }) {
   
   // UI Animations
   const uiOpacity = useRef(new Animated.Value(1)).current;
-  const gestureToastOpacity = useRef(new Animated.Value(0)).current;
+  const nextEpOpacity = useRef(new Animated.Value(1)).current;
   
   // Playback & UI State
   const [status, setStatus] = useState({});
@@ -75,10 +73,13 @@ export default function Player({ route, navigation }) {
   const [activeMenu, setActiveMenu] = useState(null); 
   const [selectedAudioType, setSelectedAudioType] = useState(targetType || 'sub');
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
-  const [is2xFastForwarding, setIs2xFastForwarding] = useState(false);
+  const [is2xActive, setIs2xActive] = useState(false);
   const previousSpeedRef = useRef(1.0);
 
-  // Stream Resolution State
+  // Next Episode Availability
+  const [hasNextEpisode, setHasNextEpisode] = useState(false);
+
+  // Stream State
   const [streamData, setStreamData] = useState(null);
   const [loadingStream, setLoadingStream] = useState(true);
   const [fatalError, setFatalError] = useState(null);
@@ -93,93 +94,78 @@ export default function Player({ route, navigation }) {
   const [currentSubText, setCurrentSubText] = useState('');
   const [subSettings, setSubSettings] = useState({ color: '#FFFFFF', size: 16, height: 40 });
 
-  // Real Hardware State Refs
-  const currentBrightnessRef = useRef(0.5);
-  const currentVolumeRef = useRef(0.5);
-  const [gestureText, setGestureText] = useState(null);
-
   const hideUITimeout = useRef(null);
   const longPressTimerRef = useRef(null);
-  const isLongPressActiveRef = useRef(false);
 
-  // 1. Strict Immersive Mode & Landscape Enforcement
-  const enforceImmersiveLandscape = useCallback(async () => {
-    try {
-      // 1. Lock screen to landscape
-      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-      
-      // 2. Hide status bar completely
-      StatusBar.setHidden(true, 'fade');
-
-      // 3. Hide Android Navigation Bar (Edge-to-edge / sticky immersive mode)
-      if (NavigationBar.setPositionAsync) {
-        await NavigationBar.setPositionAsync('absolute');
-        await NavigationBar.setVisibilityAsync('hidden');
-        await NavigationBar.setBehaviorAsync('overlay-swipe');
-      }
-    } catch (_) {}
-  }, []);
-
+  // 1. One-time Setup: Force Immersive Landscape on Mount
   useEffect(() => {
-    enforceImmersiveLandscape();
-
-    // Re-lock if system tries to rotate or reset navigation bar
-    const orientationSub = ScreenOrientation.addOrientationChangeListener(() => {
-      enforceImmersiveLandscape();
-    });
+    let isMounted = true;
+    const lockScreen = async () => {
+      try {
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+        StatusBar.setHidden(true, 'none');
+        if (NavigationBar.setPositionAsync) {
+          await NavigationBar.setPositionAsync('absolute');
+          await NavigationBar.setVisibilityAsync('hidden');
+          await NavigationBar.setBehaviorAsync('overlay-swipe');
+        }
+      } catch (_) {}
+    };
+    lockScreen();
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (activeMenu) { 
         setActiveMenu(null); 
-        enforceImmersiveLandscape();
         return true; 
       }
       if (isLocked) { 
         setIsLocked(false); 
-        showUIControls(); 
+        setShowUI(true);
+        Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
         return true; 
       }
-      handleClosePlayer();
+      navigation.goBack();
       return true;
     });
 
     return () => {
-      ScreenOrientation.removeOrientationChangeListener(orientationSub);
+      isMounted = false;
       ScreenOrientation.unlockAsync().catch(() => {});
-      StatusBar.setHidden(false, 'fade');
+      StatusBar.setHidden(false, 'none');
       if (NavigationBar.setVisibilityAsync) {
         NavigationBar.setVisibilityAsync('visible').catch(() => {});
       }
       backHandler.remove();
     };
-  }, [activeMenu, isLocked, enforceImmersiveLandscape]);
+  }, [activeMenu, isLocked]);
 
-  const handleClosePlayer = async () => {
-    await ScreenOrientation.unlockAsync().catch(() => {});
-    navigation.goBack();
-    return true;
-  };
-
-  // 2. Hardware Brightness and Volume Setup
+  // 2. Check Next Episode Availability
   useEffect(() => {
-    async function initHardwareControls() {
+    let isMounted = true;
+    const checkNextEp = async () => {
       try {
-        const { status: bStatus } = await Brightness.requestPermissionsAsync();
-        if (bStatus === 'granted') {
-          const bVal = await Brightness.getBrightnessAsync();
-          currentBrightnessRef.current = bVal >= 0 ? bVal : 0.5;
+        const nextNum = parseInt(episodeNum, 10) + 1;
+        const res = await fetch(`${VERCEL_API_BASE}/api/servers?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(nextNum)}`);
+        const json = await res.json();
+        if (isMounted) {
+          if (json?.success && Array.isArray(json?.data) && json.data.length > 0) {
+            setHasNextEpisode(true);
+            Animated.timing(nextEpOpacity, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+          } else {
+            setHasNextEpisode(false);
+            Animated.timing(nextEpOpacity, { toValue: 0.25, duration: 300, useNativeDriver: true }).start();
+          }
         }
-      } catch (_) {}
-
-      try {
-        if (VolumeManager) {
-          const vol = await VolumeManager.getVolume();
-          currentVolumeRef.current = vol?.volume ?? 0.5;
+      } catch (_) {
+        if (isMounted) {
+          setHasNextEpisode(false);
+          Animated.timing(nextEpOpacity, { toValue: 0.25, duration: 300, useNativeDriver: true }).start();
         }
-      } catch (_) {}
-    }
-    initHardwareControls();
-  }, []);
+      }
+    };
+    if (animeId) checkNextEp();
+    return () => { isMounted = false; };
+  }, [animeId, episodeNum]);
 
   // 3. Network Stream Resolution
   useEffect(() => {
@@ -216,7 +202,6 @@ export default function Player({ route, navigation }) {
       }
 
       const masterUrl = finalStreamData.m3u8;
-      
       try {
         const m3Res = await fetch(masterUrl, { 
           headers: { "Referer": finalStreamData.referer || "https://vidwish.live/" }
@@ -237,7 +222,7 @@ export default function Player({ route, navigation }) {
             }
           }
         }
-        const uniqueQualities = []; 
+        const uniqueQualities = [];
         const seenLabels = new Set();
         for (const q of qualities) { 
           if (!seenLabels.has(q.label)) { 
@@ -289,7 +274,7 @@ export default function Player({ route, navigation }) {
     loadSubtitles();
   }, [streamData]);
 
-  // 5. Playback Sync & Database Save
+  // 5. Playback Sync & Progress Sync
   useEffect(() => {
     if (!status.isLoaded) return;
     const currentMs = status.positionMillis || 0;
@@ -322,90 +307,30 @@ export default function Player({ route, navigation }) {
     }
   }, [status.positionMillis, subtitlesEnabled]);
 
-  // 6. Real Brightness and Real Volume Pan Gestures
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => {
-        isLongPressActiveRef.current = false;
-        longPressTimerRef.current = setTimeout(() => {
-          if (!isLocked && status.isPlaying && videoRef.current) {
-            isLongPressActiveRef.current = true;
-            previousSpeedRef.current = playbackSpeed;
-            videoRef.current.setRateAsync(2.0, true);
-            setIs2xFastForwarding(true);
-          }
-        }, 500);
-      },
-      onMoveShouldSetPanResponder: (_, gestureState) => 
-        Math.abs(gestureState.dy) > 12 && Math.abs(gestureState.dx) < 25,
-      onPanResponderMove: async (_, gestureState) => {
-        if (longPressTimerRef.current) {
-          clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-        }
-        if (isLocked) return;
-
-        const { moveX, dy } = gestureState;
-        const isLeft = moveX < (Dimensions.get('window').width || SCREEN_WIDTH) / 2;
-
-        if (isLeft) {
-          let delta = -dy * 0.0035;
-          let newBrightness = Math.max(0.01, Math.min(1.0, currentBrightnessRef.current + delta));
-          currentBrightnessRef.current = newBrightness;
-          try {
-            await Brightness.setBrightnessAsync(newBrightness);
-          } catch (_) {}
-          setGestureText(`Brightness: ${Math.round(newBrightness * 100)}%`);
-          gestureToastOpacity.setValue(1);
-        } else {
-          let delta = -dy * 0.005;
-          let newVol = Math.max(0, Math.min(1.0, currentVolumeRef.current + delta));
-          currentVolumeRef.current = newVol;
-          try {
-            if (VolumeManager) {
-              await VolumeManager.setVolume(newVol, { showUI: false });
-            } else if (videoRef.current) {
-              await videoRef.current.setVolumeAsync(newVol);
-            }
-          } catch (_) {}
-          setGestureText(`Volume: ${Math.round(newVol * 100)}%`);
-          gestureToastOpacity.setValue(1);
-        }
-      },
-      onPanResponderRelease: () => {
-        if (longPressTimerRef.current) {
-          clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-        }
-        if (isLongPressActiveRef.current) {
-          isLongPressActiveRef.current = false;
-          setIs2xFastForwarding(false);
-          if (videoRef.current) {
-            videoRef.current.setRateAsync(previousSpeedRef.current, true);
-          }
-        }
-        Animated.timing(gestureToastOpacity, { 
-          toValue: 0, 
-          duration: 400, 
-          delay: 300, 
-          useNativeDriver: true 
-        }).start(() => setGestureText(null));
-      },
-      onPanResponderTerminate: () => {
-        if (longPressTimerRef.current) {
-          clearTimeout(longPressTimerRef.current);
-        }
-        if (isLongPressActiveRef.current) {
-          isLongPressActiveRef.current = false;
-          setIs2xFastForwarding(false);
-          if (videoRef.current) {
-            videoRef.current.setRateAsync(previousSpeedRef.current, true);
-          }
-        }
+  // 6. YouTube-Style Long Press for 2x Speed
+  const handleTouchStart = () => {
+    if (isLocked) return;
+    longPressTimerRef.current = setTimeout(() => {
+      if (status.isPlaying && videoRef.current) {
+        previousSpeedRef.current = playbackSpeed;
+        videoRef.current.setRateAsync(2.0, true);
+        setIs2xActive(true);
       }
-    })
-  ).current;
+    }, 450);
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    if (is2xActive) {
+      setIs2xActive(false);
+      if (videoRef.current) {
+        videoRef.current.setRateAsync(previousSpeedRef.current, true);
+      }
+    }
+  };
 
   // 7. Auto-hide Overlay
   const resetHideTimer = useCallback(() => {
@@ -431,10 +356,15 @@ export default function Player({ route, navigation }) {
     }
   }, [status.isPlaying, activeMenu, isLocked, resetHideTimer]);
 
-  const showUIControls = () => { 
-    setShowUI(true); 
-    Animated.timing(uiOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start(); 
-    resetHideTimer(); 
+  const handleNextEpisode = () => {
+    if (!hasNextEpisode) return;
+    const nextNum = parseInt(episodeNum, 10) + 1;
+    navigation.replace('Player', {
+      ...route.params,
+      episodeNum: nextNum,
+      episodeTitle: `Episode ${nextNum}`,
+      slug: String(nextNum)
+    });
   };
 
   const formatTime = (millis) => {
@@ -446,20 +376,13 @@ export default function Player({ route, navigation }) {
     return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
   };
 
-  const handleOpenSettingSheet = (sheetName) => {
-    enforceImmersiveLandscape();
-    setActiveMenu(sheetName);
-  };
-
   if (loadingStream) {
     return <View style={styles.loaderContainerFull} />;
   }
 
   return (
     <View style={styles.container}>
-      <StatusBar hidden={true} />
-
-      {/* FULL EDGE-TO-EDGE VIDEO ENGINE (Extends beneath camera notch & navigation bar) */}
+      {/* FULL EDGE-TO-EDGE VIDEO ENGINE */}
       <Video
         ref={videoRef}
         style={styles.videoPlayer}
@@ -478,7 +401,7 @@ export default function Player({ route, navigation }) {
       />
 
       {/* 2X FAST FORWARD BADGE */}
-      {is2xFastForwarding && (
+      {is2xActive && (
         <View style={styles.speedIndicatorBadge} pointerEvents="none">
           <Text style={styles.speedIndicatorText}>2X SPEED ▶▶</Text>
         </View>
@@ -496,14 +419,7 @@ export default function Player({ route, navigation }) {
         </View>
       )}
 
-      {/* HARDWARE VOLUME / BRIGHTNESS TOAST */}
-      {gestureText && (
-        <Animated.View style={[styles.gestureToastContainer, { opacity: gestureToastOpacity }]} pointerEvents="none">
-          <Text style={styles.gestureToastText}>{gestureText}</Text>
-        </Animated.View>
-      )}
-
-      {/* INTERACTIVE PLAY/PAUSE/DOUBLE-TAP LAYER */}
+      {/* PLAY/PAUSE/DOUBLE-TAP LAYER (CLEANED OF AUDIO/BRIGHTNESS SWIPES) */}
       <PlayPauseSkip 
         status={status} 
         videoRef={videoRef} 
@@ -514,7 +430,8 @@ export default function Player({ route, navigation }) {
         setShowUI={setShowUI}
         activeMenu={activeMenu}
         setActiveMenu={setActiveMenu}
-        panHandlers={panResponder.panHandlers}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
       />
 
       {/* INTRO/OUTRO SKIPPER */}
@@ -542,7 +459,7 @@ export default function Player({ route, navigation }) {
 
             <View style={styles.topBarContent}>
               <View style={styles.topLeftGroup}>
-                <TouchableOpacity onPress={handleClosePlayer} style={styles.iconBtn} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconBtn} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
                   <IconBack />
                 </TouchableOpacity>
                 <View style={styles.titleColumn}>
@@ -552,13 +469,13 @@ export default function Player({ route, navigation }) {
               </View>
 
               <View style={styles.topRightGroup}>
-                <TouchableOpacity onPress={() => handleOpenSettingSheet('subs')} style={styles.iconBtn}>
+                <TouchableOpacity onPress={() => setActiveMenu('subs')} style={styles.iconBtn}>
                   <IconSubs color={subtitlesEnabled ? "#FFF" : "#777"} />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => handleOpenSettingSheet('audio')} style={styles.iconBtn}>
+                <TouchableOpacity onPress={() => setActiveMenu('audio')} style={styles.iconBtn}>
                   <IconAudio />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => handleOpenSettingSheet('quality')} style={styles.hdBtn}>
+                <TouchableOpacity onPress={() => setActiveMenu('quality')} style={styles.hdBtn}>
                   <Text style={styles.hdBtnText}>HD</Text>
                 </TouchableOpacity>
               </View>
@@ -588,9 +505,26 @@ export default function Player({ route, navigation }) {
                   setShowUI={setShowUI} 
                   hideUITimeout={hideUITimeout} 
                 />
+                {!isLocked && (
+                  <TouchableOpacity onPress={() => setActiveMenu('speed')}>
+                    <Text style={styles.speedBtnText}>{playbackSpeed.toFixed(2)}x</Text>
+                  </TouchableOpacity>
+                )}
               </View>
+
               {!isLocked && (
                 <View style={styles.toolsRight}>
+                  {/* Next Episode Button */}
+                  <Animated.View style={{ opacity: nextEpOpacity }}>
+                    <TouchableOpacity 
+                      onPress={handleNextEpisode} 
+                      disabled={!hasNextEpisode}
+                      style={[styles.iconBtn, { marginRight: 16 }]}
+                    >
+                      <IconNextEp color={hasNextEpisode ? "#FFF" : "rgba(255,255,255,0.3)"} />
+                    </TouchableOpacity>
+                  </Animated.View>
+
                   <AspectRatioButton resizeMode={resizeMode} setResizeMode={setResizeMode} />
                 </View>
               )}
@@ -627,7 +561,7 @@ export default function Player({ route, navigation }) {
       {/* BOTTOM SHEETS */}
       <VideoQualitySheet 
         activeMenu={activeMenu} 
-        setActiveMenu={(val) => { setActiveMenu(val); enforceImmersiveLandscape(); }} 
+        setActiveMenu={setActiveMenu} 
         qualityList={qualityList} 
         selectedQuality={selectedQuality} 
         setSelectedQuality={setSelectedQuality} 
@@ -636,7 +570,7 @@ export default function Player({ route, navigation }) {
       />
       <SubtitleSheet 
         activeMenu={activeMenu} 
-        setActiveMenu={(val) => { setActiveMenu(val); enforceImmersiveLandscape(); }} 
+        setActiveMenu={setActiveMenu} 
         subtitlesEnabled={subtitlesEnabled} 
         setSubtitlesEnabled={setSubtitlesEnabled} 
         subSettings={subSettings} 
@@ -644,14 +578,18 @@ export default function Player({ route, navigation }) {
       />
       <AudioSheet 
         activeMenu={activeMenu} 
-        setActiveMenu={(val) => { setActiveMenu(val); enforceImmersiveLandscape(); }}
+        setActiveMenu={setActiveMenu}
         animeId={animeId}
         episodeNum={episodeNum}
         currentTargetType={selectedAudioType}
-        onSelectAudioType={(newType) => {
-          setSelectedAudioType(newType);
-          enforceImmersiveLandscape();
-        }}
+        onSelectAudioType={setSelectedAudioType}
+      />
+      <SpeedSheet
+        activeMenu={activeMenu}
+        setActiveMenu={setActiveMenu}
+        playbackSpeed={playbackSpeed}
+        setPlaybackSpeed={setPlaybackSpeed}
+        videoRef={videoRef}
       />
     </View>
   );
@@ -660,7 +598,7 @@ export default function Player({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { 
     flex: 1, 
-    backgroundColor: '#000000',
+    backgroundColor: '#000',
     width: '100%',
     height: '100%'
   },
@@ -671,7 +609,7 @@ const styles = StyleSheet.create({
   },
   loaderContainerFull: { 
     flex: 1, 
-    backgroundColor: '#000000' 
+    backgroundColor: '#000' 
   },
 
   speedIndicatorBadge: {
@@ -692,20 +630,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1
   },
-
-  gestureToastContainer: { 
-    position: 'absolute', 
-    top: '20%', 
-    alignSelf: 'center', 
-    backgroundColor: 'rgba(10,10,10,0.92)', 
-    paddingHorizontal: 24, 
-    paddingVertical: 12, 
-    borderRadius: 30, 
-    borderWidth: 1, 
-    borderColor: 'rgba(255,255,255,0.2)', 
-    zIndex: 20 
-  },
-  gestureToastText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
 
   subtitleContainer: { 
     position: 'absolute', 
@@ -789,7 +713,13 @@ const styles = StyleSheet.create({
   },
   toolsLeft: { flexDirection: 'row', alignItems: 'center', gap: 20 },
   toolsRight: { flexDirection: 'row', alignItems: 'center' },
-  
+  speedBtnText: { 
+    color: '#FFF', 
+    fontSize: 14, 
+    fontWeight: '600', 
+    opacity: 0.9 
+  },
+
   progressRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
   timeText: { 
     color: '#FFF', 
