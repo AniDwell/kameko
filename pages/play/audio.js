@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
+import { 
+  View, Text, StyleSheet, TouchableOpacity, 
+  ScrollView, ActivityIndicator, Dimensions 
+} from 'react-native';
 
 const BRAND_RED = '#E50914';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
@@ -12,10 +15,9 @@ export default function AudioSheet({
   currentTargetType, 
   onSelectAudioType 
 }) {
-  const [availableTypes, setAvailableTypes] = useState(['sub', 'dub']);
+  const [availableTypes, setAvailableTypes] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Fetch servers dynamically to detect available types (sub, dub, raw)
   useEffect(() => {
     let isMounted = true;
     if (activeMenu !== 'audio' || !animeId) return;
@@ -23,17 +25,31 @@ export default function AudioSheet({
     const fetchAudioFormats = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`${VERCEL_API_BASE}/api/servers?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}`);
+        const res = await fetch(
+          `${VERCEL_API_BASE}/api/servers?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}`
+        );
         const json = await res.json();
         
         if (json?.success && Array.isArray(json?.data) && json.data.length > 0) {
-          const types = [...new Set(json.data.map(s => s.type?.toLowerCase()).filter(Boolean))];
-          if (isMounted && types.length > 0) {
-            setAvailableTypes(types);
+          // Extract only the types actually provided by the backend API
+          const typesFromApi = [
+            ...new Set(
+              json.data
+                .map(s => s.type?.toLowerCase())
+                .filter(t => t === 'sub' || t === 'dub' || t === 'raw')
+            )
+          ];
+          
+          if (isMounted) {
+            setAvailableTypes(typesFromApi.length > 0 ? typesFromApi : [currentTargetType || 'sub']);
           }
+        } else if (isMounted) {
+          setAvailableTypes([currentTargetType || 'sub']);
         }
       } catch (_) {
-        // Fallback to default sub/dub
+        if (isMounted) {
+          setAvailableTypes([currentTargetType || 'sub']);
+        }
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -41,7 +57,7 @@ export default function AudioSheet({
 
     fetchAudioFormats();
     return () => { isMounted = false; };
-  }, [activeMenu, animeId, episodeNum]);
+  }, [activeMenu, animeId, episodeNum, currentTargetType]);
 
   if (activeMenu !== 'audio') return null;
 
@@ -52,31 +68,36 @@ export default function AudioSheet({
       case 'dub':
         return 'English (Dub)';
       case 'raw':
-        return 'Raw (Japanese No Subs)';
+        return 'Raw Audio';
       default:
         return type.toUpperCase();
     }
   };
 
   const getChannelTag = (type) => {
-    return type.toLowerCase() === 'dub' ? 'Stereo 2.0 • EN' : 'Stereo 2.0 • JA';
+    return type.toLowerCase() === 'dub' ? 'Stereo • EN' : 'Stereo • JA';
   };
 
   return (
     <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+      {/* Backdrop */}
       <TouchableOpacity 
         style={styles.backdrop} 
         activeOpacity={1} 
         onPress={() => setActiveMenu(null)} 
       />
       
+      {/* Compact Bottom Sheet */}
       <View style={styles.sheetSurface}>
         <View style={styles.headerRow}>
           <Text style={styles.sheetHeaderTitle}>Audio & Language</Text>
           {loading && <ActivityIndicator size="small" color={BRAND_RED} />}
         </View>
 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContainer}>
+        <ScrollView 
+          showsVerticalScrollIndicator={false} 
+          contentContainerStyle={styles.listContainer}
+        >
           {availableTypes.map((type) => {
             const isSelected = (currentTargetType || 'sub').toLowerCase() === type.toLowerCase();
             return (
@@ -120,44 +141,58 @@ export default function AudioSheet({
 const styles = StyleSheet.create({
   backdrop: { 
     ...StyleSheet.absoluteFillObject, 
-    backgroundColor: 'rgba(0,0,0,0.6)', 
+    backgroundColor: 'rgba(0,0,0,0.65)', 
     zIndex: 50 
   },
   sheetSurface: { 
     position: 'absolute', 
     bottom: 0, 
     alignSelf: 'center', 
-    width: '100%', 
-    maxWidth: 600, 
+    width: '92%', 
+    maxWidth: 420, 
     backgroundColor: '#121212', 
-    borderTopLeftRadius: 24, 
-    borderTopRightRadius: 24, 
-    padding: 24, 
-    maxHeight: '85%', 
+    borderTopLeftRadius: 18, 
+    borderTopRightRadius: 18, 
+    paddingHorizontal: 18, 
+    paddingTop: 16,
+    paddingBottom: 22,
+    minHeight: 140,
+    maxHeight: '75%', 
     zIndex: 60, 
     borderTopWidth: 1, 
-    borderTopColor: 'rgba(255,255,255,0.1)' 
+    borderTopColor: 'rgba(255,255,255,0.12)',
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderLeftColor: 'rgba(255,255,255,0.06)',
+    borderRightColor: 'rgba(255,255,255,0.06)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 12,
+    elevation: 20
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   sheetHeaderTitle: { 
     color: '#FFF', 
-    fontSize: 20, 
-    fontWeight: 'bold' 
+    fontSize: 16, 
+    fontWeight: '700',
+    letterSpacing: 0.3
   },
   listContainer: {
-    paddingBottom: 20,
     gap: 8,
+    paddingVertical: 2
   },
   sheetItem: { 
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16, 
+    paddingVertical: 12, 
+    paddingHorizontal: 14,
     borderRadius: 8, 
     borderWidth: 1, 
   },
@@ -166,27 +201,27 @@ const styles = StyleSheet.create({
     borderColor: BRAND_RED 
   },
   sheetItemInactive: { 
-    backgroundColor: '#1E1E1E', 
-    borderColor: 'transparent' 
+    backgroundColor: '#1A1A1A', 
+    borderColor: 'rgba(255,255,255,0.05)' 
   },
   itemTextContainer: {
     flexDirection: 'column',
-    gap: 4,
+    gap: 2,
   },
   mainLabel: { 
-    fontSize: 16, 
+    fontSize: 14, 
     fontWeight: '700' 
   },
   channelTag: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
   },
   textActive: { 
     color: '#FFFFFF' 
   },
   textInactive: { 
-    color: 'rgba(255,255,255,0.7)' 
+    color: 'rgba(255,255,255,0.75)' 
   },
   tagActive: { 
     color: 'rgba(255,255,255,0.9)' 
@@ -195,16 +230,16 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.4)' 
   },
   checkBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     backgroundColor: '#FFF',
     justifyContent: 'center',
     alignItems: 'center',
   },
   checkText: {
     color: BRAND_RED,
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '900',
   }
 });
