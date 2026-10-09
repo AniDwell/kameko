@@ -20,7 +20,6 @@ import SpeedSheet from './speed';
 import SkipIntroOutro from './intro-outro';
 import PlayPauseSkip from './play-pause-skip';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const BRAND_RED = '#E50914';
 const VERCEL_API_BASE = 'https://anikoto-api-lyart.vercel.app';
 
@@ -63,7 +62,7 @@ export default function Player({ route, navigation }) {
   
   // UI Animations
   const uiOpacity = useRef(new Animated.Value(1)).current;
-  const nextEpOpacity = useRef(new Animated.Value(1)).current;
+  const nextEpOpacity = useRef(new Animated.Value(0.25)).current;
   
   // Playback & UI State
   const [status, setStatus] = useState({});
@@ -76,10 +75,10 @@ export default function Player({ route, navigation }) {
   const [is2xActive, setIs2xActive] = useState(false);
   const previousSpeedRef = useRef(1.0);
 
-  // Next Episode Availability
+  // Next Episode State
   const [hasNextEpisode, setHasNextEpisode] = useState(false);
 
-  // Stream State
+  // Stream Resolution
   const [streamData, setStreamData] = useState(null);
   const [loadingStream, setLoadingStream] = useState(true);
   const [fatalError, setFatalError] = useState(null);
@@ -92,15 +91,21 @@ export default function Player({ route, navigation }) {
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
   const [parsedSubs, setParsedSubs] = useState([]);
   const [currentSubText, setCurrentSubText] = useState('');
-  const [subSettings, setSubSettings] = useState({ color: '#FFFFFF', size: 16, height: 40 });
+  const [subSettings, setSubSettings] = useState({ 
+    color: '#FFFFFF', 
+    size: 16, 
+    height: 40,
+    fontFamily: 'normal',
+    backgroundColor: 'transparent'
+  });
 
   const hideUITimeout = useRef(null);
   const longPressTimerRef = useRef(null);
 
-  // 1. One-time Setup: Force Immersive Landscape on Mount
+  // 1. Full Screen Lock (Behind Camera Notch & Persistent Landscape)
   useEffect(() => {
     let isMounted = true;
-    const lockScreen = async () => {
+    const lockEdgeToEdge = async () => {
       try {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
         StatusBar.setHidden(true, 'none');
@@ -111,7 +116,7 @@ export default function Player({ route, navigation }) {
         }
       } catch (_) {}
     };
-    lockScreen();
+    lockEdgeToEdge();
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       if (activeMenu) { 
@@ -139,13 +144,13 @@ export default function Player({ route, navigation }) {
     };
   }, [activeMenu, isLocked]);
 
-  // 2. Check Next Episode Availability
+  // 2. Query Next Episode Availability
   useEffect(() => {
     let isMounted = true;
-    const checkNextEp = async () => {
+    const checkNextEpisodeAvailability = async () => {
       try {
-        const nextNum = parseInt(episodeNum, 10) + 1;
-        const res = await fetch(`${VERCEL_API_BASE}/api/servers?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(nextNum)}`);
+        const nextEpisodeNumber = parseInt(episodeNum, 10) + 1;
+        const res = await fetch(`${VERCEL_API_BASE}/api/servers?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(nextEpisodeNumber)}`);
         const json = await res.json();
         if (isMounted) {
           if (json?.success && Array.isArray(json?.data) && json.data.length > 0) {
@@ -163,14 +168,15 @@ export default function Player({ route, navigation }) {
         }
       }
     };
-    if (animeId) checkNextEp();
+    if (animeId) checkNextEpisodeAvailability();
     return () => { isMounted = false; };
   }, [animeId, episodeNum]);
 
-  // 3. Network Stream Resolution
+  // 3. Resolve Native M3U8 Stream
   useEffect(() => {
     let isMounted = true;
     const resolveStream = async () => {
+      setLoadingStream(true);
       let typeServers = ['hd-1', 'hd-2', 'vidstream-2'];
       try {
         const srvRes = await fetch(`${VERCEL_API_BASE}/api/servers?id=${encodeURIComponent(animeId)}&ep=${encodeURIComponent(episodeNum)}`);
@@ -242,39 +248,43 @@ export default function Player({ route, navigation }) {
     return () => { isMounted = false; };
   }, [animeId, episodeNum, selectedAudioType]);
 
-  // 4. Subtitle Parser
+  // 4. Reliable Subtitle Parser
+  const parseVttContent = useCallback((vttText) => {
+    const cues = [];
+    const blocks = vttText.split(/\r?\n\r?\n/);
+    for (const block of blocks) {
+      const lines = block.split(/\r?\n/);
+      const timeLine = lines.find(l => l.includes('-->'));
+      if (!timeLine) continue;
+      const [startStr, endStr] = timeLine.split('-->').map(s => s.trim());
+      const parseTimestamp = (ts) => {
+        if (!ts) return 0; 
+        const parts = ts.split(':'); 
+        let s = 0;
+        if (parts.length === 3) s += parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2].replace(',', '.'));
+        else if (parts.length === 2) s += parseInt(parts[0], 10) * 60 + parseFloat(parts[1].replace(',', '.'));
+        return s * 1000;
+      };
+      const cleanText = lines.slice(lines.indexOf(timeLine) + 1).filter(l => !l.startsWith('WEBVTT') && l.trim() !== '').join('\n').replace(/<[^>]+>/g, ''); 
+      cues.push({ startMs: parseTimestamp(startStr), endMs: parseTimestamp(endStr), text: cleanText });
+    }
+    return cues;
+  }, []);
+
   useEffect(() => {
     if (!streamData?.subtitles || streamData.subtitles.length === 0) return;
-    const loadSubtitles = async () => {
+    const loadDefaultSubtitleTrack = async () => {
       try {
         const response = await fetch(streamData.subtitles[0].file);
         if (!response.ok) return;
         const vttText = await response.text();
-        const cues = [];
-        const blocks = vttText.split(/\r?\n\r?\n/);
-        for (const block of blocks) {
-          const lines = block.split(/\r?\n/);
-          const timeLine = lines.find(l => l.includes('-->'));
-          if (!timeLine) continue;
-          const [startStr, endStr] = timeLine.split('-->').map(s => s.trim());
-          const parseTime = (ts) => {
-            if (!ts) return 0; 
-            const parts = ts.split(':'); 
-            let s = 0;
-            if (parts.length === 3) s += parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2].replace(',', '.'));
-            else if (parts.length === 2) s += parseInt(parts[0], 10) * 60 + parseFloat(parts[1].replace(',', '.'));
-            return s * 1000;
-          };
-          const cleanText = lines.slice(lines.indexOf(timeLine) + 1).filter(l => !l.startsWith('WEBVTT') && l.trim() !== '').join('\n').replace(/<[^>]+>/g, ''); 
-          cues.push({ startMs: parseTime(startStr), endMs: parseTime(endStr), text: cleanText });
-        }
-        setParsedSubs(cues);
+        setParsedSubs(parseVttContent(vttText));
       } catch (_) {}
     };
-    loadSubtitles();
-  }, [streamData]);
+    loadDefaultSubtitleTrack();
+  }, [streamData, parseVttContent]);
 
-  // 5. Playback Sync & Progress Sync
+  // 5. Playback Sync & Database Save
   useEffect(() => {
     if (!status.isLoaded) return;
     const currentMs = status.positionMillis || 0;
@@ -305,9 +315,9 @@ export default function Player({ route, navigation }) {
         timestamp: Date.now()
       }, { merge: true }).catch(() => {});
     }
-  }, [status.positionMillis, subtitlesEnabled]);
+  }, [status.positionMillis, subtitlesEnabled, parsedSubs, currentSubText]);
 
-  // 6. YouTube-Style Long Press for 2x Speed
+  // 6. Long Press 2x Speed Handlers
   const handleTouchStart = () => {
     if (isLocked) return;
     longPressTimerRef.current = setTimeout(() => {
@@ -358,12 +368,12 @@ export default function Player({ route, navigation }) {
 
   const handleNextEpisode = () => {
     if (!hasNextEpisode) return;
-    const nextNum = parseInt(episodeNum, 10) + 1;
+    const nextEpisodeNumber = parseInt(episodeNum, 10) + 1;
     navigation.replace('Player', {
       ...route.params,
-      episodeNum: nextNum,
-      episodeTitle: `Episode ${nextNum}`,
-      slug: String(nextNum)
+      episodeNum: nextEpisodeNumber,
+      episodeTitle: `Episode ${nextEpisodeNumber}`,
+      slug: String(nextEpisodeNumber)
     });
   };
 
@@ -382,7 +392,7 @@ export default function Player({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* FULL EDGE-TO-EDGE VIDEO ENGINE */}
+      {/* Edge-to-Edge Video View extending beneath camera cutout */}
       <Video
         ref={videoRef}
         style={styles.videoPlayer}
@@ -400,26 +410,36 @@ export default function Player({ route, navigation }) {
         shouldPlay
       />
 
-      {/* 2X FAST FORWARD BADGE */}
+      {/* 2X Fast Forward Pill Indicator */}
       {is2xActive && (
         <View style={styles.speedIndicatorBadge} pointerEvents="none">
           <Text style={styles.speedIndicatorText}>2X SPEED ▶▶</Text>
         </View>
       )}
 
-      {/* SUBTITLE DISPLAY */}
+      {/* Synchronized Custom Subtitles */}
       {subtitlesEnabled && currentSubText !== '' && (
         <View 
           style={[styles.subtitleContainer, { bottom: subSettings.height + (showUI ? 65 : 0) }]} 
           pointerEvents="none"
         >
-          <Text style={[styles.subtitleText, { color: subSettings.color, fontSize: subSettings.size }]}>
+          <Text 
+            style={[
+              styles.subtitleText, 
+              { 
+                color: subSettings.color || '#FFFFFF', 
+                fontSize: subSettings.size || 16,
+                fontFamily: subSettings.fontFamily || 'normal',
+                backgroundColor: subSettings.backgroundColor || 'transparent'
+              }
+            ]}
+          >
             {currentSubText}
           </Text>
         </View>
       )}
 
-      {/* PLAY/PAUSE/DOUBLE-TAP LAYER (CLEANED OF AUDIO/BRIGHTNESS SWIPES) */}
+      {/* Core Gesture Layer */}
       <PlayPauseSkip 
         status={status} 
         videoRef={videoRef} 
@@ -434,7 +454,7 @@ export default function Player({ route, navigation }) {
         onTouchEnd={handleTouchEnd}
       />
 
-      {/* INTRO/OUTRO SKIPPER */}
+      {/* Skip Intro & Outro Region */}
       <SkipIntroOutro 
         status={status} 
         videoRef={videoRef} 
@@ -442,9 +462,9 @@ export default function Player({ route, navigation }) {
         isLocked={isLocked} 
       />
 
-      {/* CONTROLS OVERLAY LAYER */}
+      {/* Controls Overlay Layer */}
       <Animated.View style={[styles.uiLayer, { opacity: uiOpacity }]} pointerEvents={showUI ? 'box-none' : 'none'}>
-        {/* TOP BAR */}
+        {/* Top Control Bar */}
         {!isLocked && (
           <View style={styles.topBarWrapper}>
             <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
@@ -483,7 +503,7 @@ export default function Player({ route, navigation }) {
           </View>
         )}
 
-        {/* BOTTOM CONTROLS & TIMELINE */}
+        {/* Bottom Control Bar and Progress Timeline */}
         <View style={styles.bottomBarWrapper}>
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
@@ -519,7 +539,7 @@ export default function Player({ route, navigation }) {
                     <TouchableOpacity 
                       onPress={handleNextEpisode} 
                       disabled={!hasNextEpisode}
-                      style={[styles.iconBtn, { marginRight: 16 }]}
+                      style={[styles.iconBtn, { marginRight: 18 }]}
                     >
                       <IconNextEp color={hasNextEpisode ? "#FFF" : "rgba(255,255,255,0.3)"} />
                     </TouchableOpacity>
@@ -558,7 +578,7 @@ export default function Player({ route, navigation }) {
         </View>
       </Animated.View>
 
-      {/* BOTTOM SHEETS */}
+      {/* Sheets & Configuration Panels */}
       <VideoQualitySheet 
         activeMenu={activeMenu} 
         setActiveMenu={setActiveMenu} 
@@ -575,6 +595,22 @@ export default function Player({ route, navigation }) {
         setSubtitlesEnabled={setSubtitlesEnabled} 
         subSettings={subSettings} 
         setSubSettings={setSubSettings} 
+        animeId={animeId}
+        episodeNum={episodeNum}
+        onSelectSubtitleTrack={async (track) => {
+          try {
+            const res = await fetch(track.file);
+            const vttText = await res.text();
+            setParsedSubs(parseVttContent(vttText));
+          } catch (_) {}
+        }}
+        onLoadCustomSubtitle={async (uri) => {
+          try {
+            const res = await fetch(uri);
+            const text = await res.text();
+            setParsedSubs(parseVttContent(text));
+          } catch (_) {}
+        }}
       />
       <AudioSheet 
         activeMenu={activeMenu} 
@@ -598,23 +634,26 @@ export default function Player({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { 
     flex: 1, 
-    backgroundColor: '#000',
+    backgroundColor: '#000000',
     width: '100%',
     height: '100%'
   },
   videoPlayer: { 
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     width: '100%',
     height: '100%'
   },
   loaderContainerFull: { 
     flex: 1, 
-    backgroundColor: '#000' 
+    backgroundColor: '#000000' 
   },
-
   speedIndicatorBadge: {
     position: 'absolute',
-    top: 30,
+    top: 25,
     alignSelf: 'center',
     backgroundColor: 'rgba(0,0,0,0.85)',
     paddingHorizontal: 16,
@@ -630,13 +669,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1
   },
-
   subtitleContainer: { 
     position: 'absolute', 
     width: '100%', 
     alignItems: 'center', 
     zIndex: 9, 
-    paddingHorizontal: 30 
+    paddingHorizontal: 25 
   },
   subtitleText: { 
     fontWeight: '800', 
@@ -644,9 +682,10 @@ const styles = StyleSheet.create({
     textShadowColor: '#000', 
     textShadowOffset: { width: 1, height: 1 }, 
     textShadowRadius: 3, 
-    backgroundColor: 'transparent' 
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4
   },
-
   uiLayer: { 
     ...StyleSheet.absoluteFillObject, 
     zIndex: 10, 
@@ -662,7 +701,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     paddingHorizontal: 28, 
-    paddingTop: 18 
+    paddingTop: 16 
   },
   topLeftGroup: { flexDirection: 'row', alignItems: 'center' },
   titleColumn: { paddingHorizontal: 10 },
@@ -693,7 +732,6 @@ const styles = StyleSheet.create({
     alignItems: 'center' 
   },
   hdBtnText: { color: '#FFF', fontSize: 10, fontWeight: 'bold' },
-
   bottomBarWrapper: { 
     width: '100%', 
     position: 'absolute', 
@@ -719,7 +757,6 @@ const styles = StyleSheet.create({
     fontWeight: '600', 
     opacity: 0.9 
   },
-
   progressRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
   timeText: { 
     color: '#FFF', 
