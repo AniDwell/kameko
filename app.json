@@ -2,34 +2,24 @@
   "expo": {
     "name": "kameko",
     "slug": "kameko",
-    "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/Kameko_logo.png",
-    "userInterfaceStyle": "dark",
-    "splash": {
-      "image": "./assets/kameko_header.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#000000"
+    "orientation": "landscape",
+    "androidStatusBar": {
+      "hidden": true,
+      "translucent": true
+    },
+    "androidNavigationBar": {
+      "visible": "sticky-immersive"
     },
     "android": {
-      "backgroundColor": "#000000",
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/Kameko_logo.png",
-        "backgroundColor": "#000000"
-      },
       "package": "com.kameko.app",
-      "googleServicesFile": "./google-services.json"
+      "softwareKeyboardLayoutMode": "pan"
     },
     "plugins": [
-      "@react-native-firebase/app",
-      "@react-native-firebase/auth",
-      "@react-native-google-signin/google-signin",
       [
         "expo-build-properties",
         {
           "android": {
-            "enableProguardInReleaseBuilds": true,
-            "multiDexEnabled": true
+            "enableProguardInReleaseBuilds": false
           }
         }
       ]
