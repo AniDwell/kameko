@@ -6,11 +6,6 @@
     "orientation": "default",
     "icon": "./assets/Kameko_logo.png",
     "userInterfaceStyle": "dark",
-    "splash": {
-      "image": "./assets/kameko_header.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#000000"
-    },
     "androidStatusBar": {
       "hidden": true,
       "translucent": true
@@ -36,6 +31,7 @@
       "@react-native-firebase/app",
       "@react-native-firebase/auth",
       "@react-native-google-signin/google-signin",
+      "./withFFmpeg.js",
       [
         "expo-notifications",
         {
@@ -47,6 +43,7 @@
         "expo-build-properties",
         {
           "android": {
+            "minSdkVersion": 24,
             "enableProguardInReleaseBuilds": true,
             "multiDexEnabled": true,
             "packagingOptions": {
