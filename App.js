@@ -1,22 +1,43 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { SafeAreaView, StatusBar, StyleSheet, ActivityIndicator, View, Animated, Easing } from 'react-native';
+import { 
+  SafeAreaView, StatusBar, StyleSheet, ActivityIndicator, 
+  View, Animated, Easing, Platform, Alert 
+} from 'react-native';
 import auth from '@react-native-firebase/auth';
+import firestore from '@react-native-firebase/firestore';
+import messaging from '@react-native-firebase/messaging';
+import * as Notifications from 'expo-notifications';
 
 import Login from './pages/login';
 import Profiles from './pages/profile'; 
 import Home from './pages/home';
+
+// 1. Configure foreground notification behavior
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
+// 2. Headless background handler (must run outside the component tree)
+messaging().setBackgroundMessageHandler(async remoteMessage => {
+  console.log('FCM Message handled in background:', remoteMessage);
+});
 
 export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [user, setUser] = useState(null);
   
   const [activeProfile, setActiveProfile] = useState(null);
-  const [previousProfile, setPreviousProfile] = useState(null); // REMEMBERS PROFILE FOR BACK BUTTON
+  const [previousProfile, setPreviousProfile] = useState(null);
   
   const [isAnimating, setIsAnimating] = useState(false);
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const opacityAnim = useRef(new Animated.Value(1)).current;
 
+  // Firebase Auth Listener
   useEffect(() => {
     const subscriber = auth().onAuthStateChanged((currentUser) => {
       setUser(currentUser);
@@ -26,10 +47,81 @@ export default function App() {
     return subscriber;
   }, [initializing]);
 
+  // Push Notifications Setup & Token Registration
+  useEffect(() => {
+    if (!user) return;
+
+    const setupNotifications = async () => {
+      try {
+        if (Platform.OS === 'android') {
+          await Notifications.setNotificationChannelAsync('default', {
+            name: 'default',
+            importance: Notifications.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: '#E50914',
+          });
+        }
+
+        const authStatus = await messaging().requestPermission();
+        const enabled =
+          authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+          authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+
+        if (enabled) {
+          const fcmToken = await messaging().getToken();
+          if (fcmToken) {
+            // Save FCM token under the user document for targeted pushes
+            await firestore().collection('users').doc(user.uid).set(
+              {
+                fcmToken,
+                lastSeen: firestore.FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+          }
+        }
+      } catch (err) {
+        console.warn('Push registration warning:', err);
+      }
+    };
+
+    setupNotifications();
+
+    // Foreground notification listener
+    const unsubscribeForeground = messaging().onMessage(async remoteMessage => {
+      const { notification } = remoteMessage;
+      if (notification) {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: notification.title || 'Kameko',
+            body: notification.body || '',
+            data: remoteMessage.data || {},
+          },
+          trigger: null, // show immediately
+        });
+      }
+    });
+
+    // Refresh token listener
+    const unsubscribeTokenRefresh = messaging().onTokenRefresh(async (newToken) => {
+      if (user) {
+        await firestore().collection('users').doc(user.uid).set(
+          { fcmToken: newToken },
+          { merge: true }
+        );
+      }
+    });
+
+    return () => {
+      unsubscribeForeground();
+      unsubscribeTokenRefresh();
+    };
+  }, [user]);
+
   const handleProfileSelect = (profile) => {
     setIsAnimating(true);
     setActiveProfile(profile);
-    setPreviousProfile(null); // Clear history once they are logged in
+    setPreviousProfile(null);
 
     Animated.parallel([
       Animated.timing(scaleAnim, { toValue: 4, duration: 700, easing: Easing.out(Easing.exp), useNativeDriver: true }),
@@ -41,10 +133,9 @@ export default function App() {
     });
   };
 
-  // Triggered when user clicks the avatar in home.js
   const handleSwitchProfile = () => {
-    setPreviousProfile(activeProfile); // Save current profile
-    setActiveProfile(null); // Triggers the Profiles screen overlay
+    setPreviousProfile(activeProfile);
+    setActiveProfile(null);
   };
 
   if (initializing) {
@@ -57,7 +148,7 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.trueBlackRoot}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" translucent={false} />
+      <StatusBar hidden={true} />
       
       {!user ? (
         <Login setLoggedInUser={setUser} />
