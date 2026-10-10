@@ -9,6 +9,7 @@
   "dependencies": {
     "expo": "~50.0.14",
     "expo-status-bar": "~1.11.1",
+    "expo-splash-screen": "~0.26.5",
     "react": "18.2.0",
     "react-native": "0.73.6",
     "@react-native-firebase/app": "^18.8.0",
@@ -25,8 +26,7 @@
     "expo-notifications": "~0.27.6",
     "expo-device": "~5.9.4",
     "@react-native-community/slider": "4.5.0",
-        "ffmpeg-kit-react-native": "^6.0.2"
-
+    "ffmpeg-kit-react-native": "^6.0.2"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0"
