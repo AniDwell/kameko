@@ -25,8 +25,7 @@
     "expo-document-picker": "~11.10.1",
     "expo-notifications": "~0.27.6",
     "expo-device": "~5.9.4",
-    "@react-native-community/slider": "4.5.0",
-    "ffmpeg-kit-react-native": "^6.0.2"
+    "@react-native-community/slider": "4.5.0"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0"
