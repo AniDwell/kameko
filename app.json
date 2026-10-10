@@ -36,7 +36,6 @@
       "@react-native-firebase/auth",
       "@react-native-google-signin/google-signin",
       "./withAndroidFixes.js",
-      "@notifee/react-native",
       [
         "expo-notifications",
         {
