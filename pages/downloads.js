@@ -1,13 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, 
-  FlatList, StatusBar, ActivityIndicator, Alert 
+  FlatList, StatusBar, ActivityIndicator, Alert, DeviceEventEmitter 
 } from 'react-native';
 import firestore from '@react-native-firebase/firestore';
 import Svg, { Path } from 'react-native-svg';
 
 import ProxyImage from '../components/ProxyImage';
 import { downloadEpisodeBundle, deleteEpisodeFolder } from '../components/HLSDownloader';
+import { 
+  showProgressNotification, 
+  showCompletionNotification, 
+  showErrorNotification, 
+  clearNotification 
+} from '../components/NotificationEngine';
 
 const BRAND_RED = '#E50914';
 const BRAND_ACCENT = '#38BDF8';
@@ -110,6 +116,9 @@ export default function Downloads({ user, navigation, onBack }) {
     abortControllerRef.current = abortController;
 
     const folderName = `${ep.seriesId}_ep${ep.episodeNum}`;
+    const notifId = `dl-${folderName}`; 
+    const displayTitle = `${ep.seriesTitle} - Ep ${ep.episodeNum}`;
+
     const epRef = firestore()
       .collection('users')
       .doc(user.uid)
@@ -118,20 +127,26 @@ export default function Downloads({ user, navigation, onBack }) {
       .collection('episodes')
       .doc(ep.epDocId);
 
+    // Listen for the Native Android "Cancel" button
+    const cancelListener = DeviceEventEmitter.addListener('CANCEL_DOWNLOAD', (id) => {
+      if (id === notifId) {
+        cancelActiveDownload();
+      }
+    });
+
     await epRef.set({ status: 'downloading', targetFolder: folderName }, { merge: true });
 
     try {
-      // Resolve payload: use embedded payload or fetch from your scraper endpoint
+      // Init Notification
+      await showProgressNotification(notifId, displayTitle, 0);
+
+      // Resolve Payload
       let apiPayload = ep.apiData;
       if (!apiPayload && ep.streamApiUrl) {
         const res = await fetch(ep.streamApiUrl, { signal: abortController.signal });
         const json = await res.json();
-        if (json.success && json.data) {
-          apiPayload = json.data;
-        }
+        if (json.success && json.data) apiPayload = json.data;
       }
-
-      // Fallback fallback construction if only raw m3u8 and referer were stored
       if (!apiPayload) {
         apiPayload = {
           m3u8: ep.videoUrl,
@@ -142,14 +157,22 @@ export default function Downloads({ user, navigation, onBack }) {
         };
       }
 
+      // Execute Download
       const result = await downloadEpisodeBundle({
         apiData: apiPayload,
         targetFolder: folderName,
-        onProgress: (pct) => setDownloadProgress(pct),
-        abortController: abortController
+        abortController: abortController,
+        onProgress: async (pct) => {
+          setDownloadProgress(pct);
+          if (pct % 5 === 0 || pct === 100) {
+            await showProgressNotification(notifId, displayTitle, pct);
+          }
+        },
       });
 
       if (result.success) {
+        await showCompletionNotification(notifId, displayTitle);
+        
         await epRef.set({
           status: 'completed',
           localUri: result.localM3u8Uri,
@@ -158,33 +181,23 @@ export default function Downloads({ user, navigation, onBack }) {
           downloadedAt: Date.now()
         }, { merge: true });
 
-        // Update User Taste Profile Collection
-        await firestore()
-          .collection('users')
-          .doc(user.uid)
-          .collection('taste')
-          .doc(ep.seriesId)
-          .set({
-            animeId: ep.seriesId,
-            title: ep.seriesTitle,
-            posterUrl: ep.posterUrl || '',
-            lastDownloadedQuality: ep.chosenQuality || 'Auto',
-            addedAt: firestore.FieldValue.serverTimestamp()
-          }, { merge: true });
+        await firestore().collection('users').doc(user.uid).collection('taste').doc(ep.seriesId)
+          .set({ animeId: ep.seriesId, title: ep.seriesTitle, addedAt: firestore.FieldValue.serverTimestamp() }, { merge: true });
 
-        if (expandedSeriesId === ep.seriesId) {
-          loadSeriesEpisodes(ep.seriesId);
-        }
+        if (expandedSeriesId === ep.seriesId) loadSeriesEpisodes(ep.seriesId);
       }
     } catch (err) {
       if (err.message.includes('Canceled') || abortController.signal.aborted) {
+        await clearNotification(notifId);
         await deleteEpisodeFolder(folderName);
         await epRef.delete();
       } else {
+        await showErrorNotification(notifId, displayTitle);
         await epRef.set({ status: 'failed', errorMessage: err.message }, { merge: true });
         Alert.alert('Download Error', `Episode ${ep.episodeNum} failed: ${err.message}`);
       }
     } finally {
+      cancelListener.remove();
       isDownloadingRef.current = false;
       setActiveDownload(null);
       setDownloadProgress(0);
@@ -198,7 +211,7 @@ export default function Downloads({ user, navigation, onBack }) {
     }
   };
 
-  // 3. Series Drawer & Delete Actions
+  // 3. Series Drawer & Actions
   const loadSeriesEpisodes = async (seriesId) => {
     if (expandedSeriesId === seriesId) {
       setExpandedSeriesId(null);
@@ -230,36 +243,23 @@ export default function Downloads({ user, navigation, onBack }) {
   };
 
   const deleteDownloadedEpisode = async (seriesId, ep) => {
-    Alert.alert(
-      'Delete Episode',
-      `Delete Episode ${ep.episodeNum} and all its cached segments?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
-          style: 'destructive', 
-          onPress: async () => {
-            try {
-              if (ep.targetFolder) {
-                await deleteEpisodeFolder(ep.targetFolder);
-              }
-              await firestore()
-                .collection('users')
-                .doc(user.uid)
-                .collection('downloads')
-                .doc(seriesId)
-                .collection('episodes')
-                .doc(ep.id)
-                .delete();
-
-              setSeriesEpisodes(prev => prev.filter(item => item.id !== ep.id));
-            } catch (err) {
-              Alert.alert('Error', 'Failed to delete files.');
-            }
+    Alert.alert('Delete Episode', `Delete Episode ${ep.episodeNum} and all cached segments?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { 
+        text: 'Delete', 
+        style: 'destructive', 
+        onPress: async () => {
+          try {
+            if (ep.targetFolder) await deleteEpisodeFolder(ep.targetFolder);
+            await firestore().collection('users').doc(user.uid)
+              .collection('downloads').doc(seriesId).collection('episodes').doc(ep.id).delete();
+            setSeriesEpisodes(prev => prev.filter(item => item.id !== ep.id));
+          } catch (err) {
+            Alert.alert('Error', 'Failed to delete files.');
           }
         }
-      ]
-    );
+      }
+    ]);
   };
 
   const playOfflineVideo = (ep) => {
@@ -298,36 +298,21 @@ export default function Downloads({ user, navigation, onBack }) {
               <View style={styles.activeDownloadSection}>
                 <Text style={styles.sectionHeader}>DOWNLOADING NOW</Text>
                 <View style={styles.activeCard}>
-                  <ProxyImage 
-                    source={{ uri: activeDownload.posterUrl }} 
-                    style={styles.activePoster} 
-                    resizeMode="cover" 
-                  />
-
+                  <ProxyImage source={{ uri: activeDownload.posterUrl }} style={styles.activePoster} resizeMode="cover" />
                   <View style={styles.activeDetails}>
-                    <Text style={styles.activeSeriesTitle} numberOfLines={1}>
-                      {activeDownload.seriesTitle}
-                    </Text>
-                    <Text style={styles.activeEpTitle} numberOfLines={1}>
-                      Episode {activeDownload.episodeNum} • {activeDownload.episodeTitle || 'HLS Stream'}
-                    </Text>
+                    <Text style={styles.activeSeriesTitle} numberOfLines={1}>{activeDownload.seriesTitle}</Text>
+                    <Text style={styles.activeEpTitle} numberOfLines={1}>Episode {activeDownload.episodeNum} • {activeDownload.episodeTitle || 'HLS Stream'}</Text>
 
                     <View style={styles.statsRow}>
                       <Text style={styles.statsPercentage}>{downloadProgress}%</Text>
-                      <Text style={styles.statsMeta}>
-                        {activeDownload.chosenQuality || 'Auto'} • {activeDownload.type?.toUpperCase() || 'SUB'}
-                      </Text>
+                      <Text style={styles.statsMeta}>{activeDownload.chosenQuality || 'Auto'} • {activeDownload.type?.toUpperCase() || 'SUB'}</Text>
                     </View>
 
                     <View style={styles.progressBarTrack}>
                       <View style={[styles.progressBarFill, { width: `${downloadProgress}%` }]} />
                     </View>
 
-                    <TouchableOpacity 
-                      style={styles.cancelDownloadBtn} 
-                      onPress={cancelActiveDownload}
-                      activeOpacity={0.7}
-                    >
+                    <TouchableOpacity style={styles.cancelDownloadBtn} onPress={cancelActiveDownload} activeOpacity={0.7}>
                       <IconCancel />
                       <Text style={styles.cancelBtnText}>Cancel</Text>
                     </TouchableOpacity>
@@ -343,24 +328,13 @@ export default function Downloads({ user, navigation, onBack }) {
         }
         renderItem={({ item }) => (
           <View style={styles.seriesContainer}>
-            <TouchableOpacity 
-              style={styles.seriesCard} 
-              activeOpacity={0.8}
-              onPress={() => loadSeriesEpisodes(item.id)}
-            >
-              <ProxyImage 
-                source={{ uri: item.posterUrl }} 
-                style={styles.seriesPoster} 
-                resizeMode="cover" 
-              />
+            <TouchableOpacity style={styles.seriesCard} activeOpacity={0.8} onPress={() => loadSeriesEpisodes(item.id)}>
+              <ProxyImage source={{ uri: item.posterUrl }} style={styles.seriesPoster} resizeMode="cover" />
               <View style={styles.seriesInfo}>
                 <Text style={styles.seriesTitle} numberOfLines={1}>{item.seriesTitle}</Text>
                 <Text style={styles.seriesSubtitle}>Tap to view offline episodes</Text>
               </View>
-              <View style={[
-                styles.arrowIcon, 
-                expandedSeriesId === item.id && styles.arrowIconRotated
-              ]}>
+              <View style={[styles.arrowIcon, expandedSeriesId === item.id && styles.arrowIconRotated]}>
                 <IconChevronDown color="rgba(255,255,255,0.6)" />
               </View>
             </TouchableOpacity>
@@ -377,30 +351,16 @@ export default function Downloads({ user, navigation, onBack }) {
                       <View style={styles.epLeftGroup}>
                         <Text style={styles.epBulletNumber}>•{ep.episodeNum}</Text>
                         <View style={{ flex: 1, paddingRight: 8 }}>
-                          <Text style={styles.epTitle} numberOfLines={1}>
-                            {ep.episodeTitle || `Episode ${ep.episodeNum}`}
-                          </Text>
-                          <Text style={styles.epMetaPills}>
-                            {ep.chosenQuality || 'Auto'} • {ep.type?.toUpperCase() || 'SUB'}
-                          </Text>
+                          <Text style={styles.epTitle} numberOfLines={1}>{ep.episodeTitle || `Episode ${ep.episodeNum}`}</Text>
+                          <Text style={styles.epMetaPills}>{ep.chosenQuality || 'Auto'} • {ep.type?.toUpperCase() || 'SUB'}</Text>
                         </View>
                       </View>
-
                       <View style={styles.epActionRow}>
-                        <TouchableOpacity 
-                          style={styles.epPlayBtn} 
-                          onPress={() => playOfflineVideo(ep)}
-                          activeOpacity={0.8}
-                        >
+                        <TouchableOpacity style={styles.epPlayBtn} onPress={() => playOfflineVideo(ep)} activeOpacity={0.8}>
                           <IconPlay color="#000" size={12} />
                           <Text style={styles.epPlayText}>Play</Text>
                         </TouchableOpacity>
-
-                        <TouchableOpacity 
-                          style={styles.epTrashBtn} 
-                          onPress={() => deleteDownloadedEpisode(item.id, ep)}
-                          activeOpacity={0.7}
-                        >
+                        <TouchableOpacity style={styles.epTrashBtn} onPress={() => deleteDownloadedEpisode(item.id, ep)} activeOpacity={0.7}>
                           <IconTrash />
                         </TouchableOpacity>
                       </View>
@@ -424,42 +384,20 @@ export default function Downloads({ user, navigation, onBack }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000000' },
   header: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    paddingTop: 36, 
-    paddingBottom: 16, 
-    paddingHorizontal: 16, 
-    backgroundColor: '#0A0A0A', 
-    borderBottomWidth: 1, 
-    borderBottomColor: 'rgba(255,255,255,0.08)' 
+    flexDirection: 'row', alignItems: 'center', paddingTop: 36, paddingBottom: 16, 
+    paddingHorizontal: 16, backgroundColor: '#0A0A0A', borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.08)' 
   },
   backBtn: { 
-    width: 38, 
-    height: 38, 
-    borderRadius: 19, 
-    backgroundColor: 'rgba(255,255,255,0.08)', 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    marginRight: 14 
+    width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.08)', 
+    justifyContent: 'center', alignItems: 'center', marginRight: 14 
   },
   headerTitle: { color: '#FFF', fontSize: 20, fontWeight: '900', letterSpacing: 0.5 },
   listPadding: { paddingHorizontal: 16, paddingBottom: 60, paddingTop: 16 },
-  sectionHeader: { 
-    color: 'rgba(255,255,255,0.4)', 
-    fontSize: 11, 
-    fontWeight: '800', 
-    letterSpacing: 1, 
-    marginBottom: 12, 
-    marginTop: 8 
-  },
+  sectionHeader: { color: 'rgba(255,255,255,0.4)', fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: 12, marginTop: 8 },
   activeDownloadSection: { marginBottom: 20 },
   activeCard: { 
-    flexDirection: 'row', 
-    backgroundColor: '#111111', 
-    borderRadius: 12, 
-    padding: 12, 
-    borderWidth: 1, 
-    borderColor: 'rgba(255,255,255,0.1)' 
+    flexDirection: 'row', backgroundColor: '#111111', borderRadius: 12, padding: 12, 
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' 
   },
   activePoster: { width: 80, height: 110, borderRadius: 8, backgroundColor: '#1A1A1A' },
   activeDetails: { flex: 1, marginLeft: 14, justifyContent: 'center' },
@@ -469,36 +407,18 @@ const styles = StyleSheet.create({
   statsPercentage: { color: BRAND_ACCENT, fontSize: 12, fontWeight: '900' },
   statsMeta: { color: 'rgba(255,255,255,0.4)', fontSize: 11, fontWeight: '700' },
   progressBarTrack: { 
-    width: '100%', 
-    height: 5, 
-    backgroundColor: 'rgba(255,255,255,0.1)', 
-    borderRadius: 3, 
-    overflow: 'hidden', 
-    marginBottom: 10 
+    width: '100%', height: 5, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden', marginBottom: 10 
   },
   progressBarFill: { height: '100%', backgroundColor: BRAND_ACCENT },
   cancelDownloadBtn: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    alignSelf: 'flex-start', 
-    backgroundColor: 'rgba(239,68,68,0.2)', 
-    borderWidth: 1, 
-    borderColor: 'rgba(239,68,68,0.4)', 
-    borderRadius: 6, 
-    paddingHorizontal: 10, 
-    paddingVertical: 4, 
-    gap: 4 
+    flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', backgroundColor: 'rgba(239,68,68,0.2)', 
+    borderWidth: 1, borderColor: 'rgba(239,68,68,0.4)', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4, gap: 4 
   },
   cancelBtnText: { color: '#EF4444', fontSize: 11, fontWeight: '800' },
   seriesContainer: { marginBottom: 10 },
   seriesCard: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    backgroundColor: '#0D0D0D', 
-    borderRadius: 10, 
-    padding: 10, 
-    borderWidth: 1, 
-    borderColor: 'rgba(255,255,255,0.06)' 
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#0D0D0D', borderRadius: 10, padding: 10, 
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' 
   },
   seriesPoster: { width: 48, height: 68, borderRadius: 6, backgroundColor: '#1E1E1E' },
   seriesInfo: { flex: 1, marginLeft: 12 },
@@ -507,23 +427,13 @@ const styles = StyleSheet.create({
   arrowIcon: { padding: 8 },
   arrowIconRotated: { transform: [{ rotate: '180deg' }] },
   episodesDrawer: { 
-    backgroundColor: '#080808', 
-    borderBottomLeftRadius: 10, 
-    borderBottomRightRadius: 10, 
-    paddingHorizontal: 12, 
-    paddingVertical: 6, 
-    borderWidth: 1, 
-    borderTopWidth: 0, 
-    borderColor: 'rgba(255,255,255,0.06)' 
+    backgroundColor: '#080808', borderBottomLeftRadius: 10, borderBottomRightRadius: 10, paddingHorizontal: 12, 
+    paddingVertical: 6, borderWidth: 1, borderTopWidth: 0, borderColor: 'rgba(255,255,255,0.06)' 
   },
   emptyDrawerText: { color: 'rgba(255,255,255,0.4)', fontSize: 12, textAlign: 'center', marginVertical: 10 },
   episodeRow: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'space-between', 
-    paddingVertical: 10, 
-    borderBottomWidth: 1, 
-    borderBottomColor: 'rgba(255,255,255,0.04)' 
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, 
+    borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)' 
   },
   epLeftGroup: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   epBulletNumber: { color: 'rgba(255,255,255,0.4)', fontSize: 14, fontWeight: '800', width: 28 },
@@ -531,13 +441,7 @@ const styles = StyleSheet.create({
   epMetaPills: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: '700' },
   epActionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   epPlayBtn: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    backgroundColor: '#FFF', 
-    borderRadius: 4, 
-    paddingHorizontal: 10, 
-    paddingVertical: 6, 
-    gap: 4 
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 4, paddingHorizontal: 10, paddingVertical: 6, gap: 4 
   },
   epPlayText: { color: '#000', fontSize: 11, fontWeight: '800' },
   epTrashBtn: { padding: 6, backgroundColor: 'rgba(239,68,68,0.1)', borderRadius: 4 },
