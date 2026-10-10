@@ -1,198 +1,546 @@
-import * as FileSystem from 'expo-file-system';
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  View, Text, StyleSheet, TouchableOpacity, 
+  FlatList, StatusBar, ActivityIndicator, Alert 
+} from 'react-native';
+import firestore from '@react-native-firebase/firestore';
+import Svg, { Path } from 'react-native-svg';
 
-function resolveUrl(relativeOrAbsoluteUrl, baseUrl) {
-  if (relativeOrAbsoluteUrl.startsWith('http://') || relativeOrAbsoluteUrl.startsWith('https://')) {
-    return relativeOrAbsoluteUrl;
-  }
-  if (relativeOrAbsoluteUrl.startsWith('/')) {
-    const urlObj = new URL(baseUrl);
-    return `${urlObj.origin}${relativeOrAbsoluteUrl}`;
-  }
-  const baseParts = baseUrl.split('?')[0].split('/');
-  baseParts.pop();
-  return `${baseParts.join('/')}/${relativeOrAbsoluteUrl}`;
-}
+import ProxyImage from '../components/ProxyImage';
+import { downloadEpisodeBundle, deleteEpisodeFolder } from '../components/HLSDownloader';
 
-async function extractMediaPlaylistUrl(m3u8Url, headers = {}) {
-  const res = await fetch(m3u8Url, { headers });
-  if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch manifest`);
-  
-  const content = await res.text();
+const BRAND_RED = '#E50914';
+const BRAND_ACCENT = '#38BDF8';
 
-  if (!content.includes('#EXT-X-STREAM-INF')) {
-    return { mediaUrl: m3u8Url, rawContent: content };
-  }
+// --- Icons ---
+const IconBack = ({ size = 22 }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#FFF" strokeWidth="2.5">
+    <Path d="M15 18l-6-6 6-6" />
+  </Svg>
+);
+const IconPlay = ({ size = 16, color = "#000" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <Path d="M8 5v14l11-7z" />
+  </Svg>
+);
+const IconTrash = ({ size = 18, color = "#EF4444" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+    <Path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+  </Svg>
+);
+const IconCancel = ({ size = 18, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5">
+    <Path d="M18 6L6 18M6 6l12 12" />
+  </Svg>
+);
+const IconChevronDown = ({ size = 18, color = "#FFF" }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5">
+    <Path d="M6 9l6 6 6-6" />
+  </Svg>
+);
 
-  const lines = content.split('\n');
-  let bestVariantUrl = null;
-  let maxBandwidth = -1;
+export default function Downloads({ user, navigation, onBack }) {
+  const [activeDownload, setActiveDownload] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (line.startsWith('#EXT-X-STREAM-INF')) {
-      const bwMatch = line.match(/BANDWIDTH=(\d+)/);
-      const bandwidth = bwMatch ? parseInt(bwMatch[1], 10) : 0;
+  const [downloadedSeries, setDownloadedSeries] = useState([]);
+  const [expandedSeriesId, setExpandedSeriesId] = useState(null);
+  const [seriesEpisodes, setSeriesEpisodes] = useState([]);
+  const [loadingEpisodes, setLoadingEpisodes] = useState(false);
 
-      let nextLineIndex = i + 1;
-      while (nextLineIndex < lines.length && (lines[nextLineIndex].trim().startsWith('#') || !lines[nextLineIndex].trim())) {
-        nextLineIndex++;
-      }
+  const isDownloadingRef = useRef(false);
+  const abortControllerRef = useRef(null);
 
-      if (nextLineIndex < lines.length && bandwidth > maxBandwidth) {
-        maxBandwidth = bandwidth;
-        bestVariantUrl = lines[nextLineIndex].trim();
-      }
-    }
-  }
+  // 1. Listen for Pending / Downloading tasks from Firestore
+  useEffect(() => {
+    if (!user) return;
 
-  if (!bestVariantUrl) {
-    throw new Error('No valid variant streams found in master manifest');
-  }
-
-  const resolvedMediaUrl = resolveUrl(bestVariantUrl, m3u8Url);
-  const mediaRes = await fetch(resolvedMediaUrl, { headers });
-  const mediaContent = await mediaRes.text();
-
-  return { mediaUrl: resolvedMediaUrl, rawContent: mediaContent };
-}
-
-/**
- * Downloads HLS stream, subtitles, and chapter metadata using API response payload
- */
-export async function downloadEpisodeBundle({
-  apiData,        // The exact data object from your API
-  targetFolder,   // e.g., "slime_s4_ep24"
-  onProgress,     // (pct: number) => void
-  signal,         // AbortSignal
-}) {
-  const targetDir = `${FileSystem.documentDirectory}kameko_vault/${targetFolder}/`;
-
-  // 1. Initialize episode vault directory
-  const dirInfo = await FileSystem.getInfoAsync(targetDir);
-  if (!dirInfo.exists) {
-    await FileSystem.makeDirectoryAsync(targetDir, { intermediates: true });
-  }
-
-  const requestHeaders = {
-    'Referer': apiData.referer,
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-  };
-
-  // 2. Download Subtitles (.vtt files)
-  const downloadedSubtitles = [];
-  if (Array.isArray(apiData.subtitles)) {
-    for (let i = 0; i < apiData.subtitles.length; i++) {
-      const sub = apiData.subtitles[i];
-      if (!sub.file) continue;
-
-      const subFileName = `sub_${i}_${(sub.label || 'default').toLowerCase().replace(/\s+/g, '_')}.vtt`;
-      const subLocalUri = targetDir + subFileName;
-
-      await FileSystem.downloadAsync(sub.file, subLocalUri, { headers: requestHeaders });
-      downloadedSubtitles.push({
-        label: sub.label || 'English',
-        localUri: subLocalUri,
-        default: sub.default || false,
-      });
-    }
-  }
-
-  // 3. Save Offline Metadata (Intro/Outro timings & subtitle paths)
-  const metaPayload = {
-    intro: apiData.intro || { start: 0, end: 0 },
-    outro: apiData.outro || { start: 0, end: 0 },
-    subtitles: downloadedSubtitles,
-  };
-  await FileSystem.writeAsStringAsync(`${targetDir}meta.json`, JSON.stringify(metaPayload));
-
-  // 4. Resolve Master Playlist & Parse Chunks
-  const { mediaUrl, rawContent } = await extractMediaPlaylistUrl(apiData.m3u8, requestHeaders);
-  const lines = rawContent.split('\n');
-
-  const segmentsToDownload = [];
-  const keysToDownload = [];
-  const rewrittenLines = [];
-
-  let keyIndex = 0;
-  let segIndex = 0;
-
-  for (let line of lines) {
-    const trimmed = line.trim();
-
-    // Handle AES-128 Key Chunks
-    if (trimmed.startsWith('#EXT-X-KEY')) {
-      const uriMatch = trimmed.match(/URI="([^"]+)"/);
-      if (uriMatch) {
-        const rawKeyUri = uriMatch[1];
-        const fullKeyUrl = resolveUrl(rawKeyUri, mediaUrl);
-        const localKeyName = `enc_${keyIndex}.key`;
-
-        keysToDownload.push({
-          url: fullKeyUrl,
-          localUri: targetDir + localKeyName,
-        });
-
-        rewrittenLines.push(trimmed.replace(rawKeyUri, localKeyName));
-        keyIndex++;
-        continue;
-      }
-    }
-
-    // Handle .ts Segments
-    if (trimmed.length > 0 && !trimmed.startsWith('#')) {
-      const fullSegUrl = resolveUrl(trimmed, mediaUrl);
-      const localSegName = `chunk_${segIndex}.ts`;
-
-      segmentsToDownload.push({
-        url: fullSegUrl,
-        localUri: targetDir + localSegName,
-      });
-
-      rewrittenLines.push(localSegName);
-      segIndex++;
-    } else {
-      rewrittenLines.push(trimmed);
-    }
-  }
-
-  if (segmentsToDownload.length === 0) {
-    throw new Error('No media chunks found inside the resolved playlist');
-  }
-
-  // 5. Download Decryption Keys
-  for (const key of keysToDownload) {
-    if (signal?.aborted) throw new Error('Canceled');
-    await FileSystem.downloadAsync(key.url, key.localUri, { headers: requestHeaders });
-  }
-
-  // 6. Download Segments via Concurrency Pool (5 at a time)
-  const total = segmentsToDownload.length;
-  const CONCURRENCY = 5;
-  let completed = 0;
-
-  for (let i = 0; i < total; i += CONCURRENCY) {
-    if (signal?.aborted) throw new Error('Canceled');
-
-    const batch = segmentsToDownload.slice(i, i + CONCURRENCY);
-    await Promise.all(
-      batch.map(async (seg) => {
-        await FileSystem.downloadAsync(seg.url, seg.localUri, { headers: requestHeaders });
-        completed++;
-        if (onProgress) {
-          onProgress(Math.round((completed / total) * 100));
+    const unsub = firestore()
+      .collection('users')
+      .doc(user.uid)
+      .collection('downloads')
+      .onSnapshot(async (snapshot) => {
+        if (!snapshot || snapshot.empty) {
+          setDownloadedSeries([]);
+          return;
         }
-      })
-    );
-  }
 
-  // 7. Write final rewritten local playlist
-  const localM3u8Uri = `${targetDir}local.m3u8`;
-  await FileSystem.writeAsStringAsync(localM3u8Uri, rewrittenLines.join('\n'));
+        const seriesList = [];
+        let nextTask = null;
 
-  return {
-    success: true,
-    localM3u8Uri,
-    localMetaUri: `${targetDir}meta.json`,
-    targetDir,
+        for (const doc of snapshot.docs) {
+          const sData = doc.data();
+          seriesList.push({ id: doc.id, ...sData });
+
+          if (!isDownloadingRef.current && !nextTask) {
+            const epsSnap = await doc.ref.collection('episodes').get();
+            for (const epDoc of epsSnap.docs) {
+              const epData = epDoc.data();
+              if (epData.status === 'downloading' || epData.status === 'pending') {
+                nextTask = {
+                  ...epData,
+                  seriesId: doc.id,
+                  seriesTitle: sData.seriesTitle,
+                  posterUrl: sData.posterUrl,
+                  epDocId: epDoc.id
+                };
+                break;
+              }
+            }
+          }
+        }
+
+        setDownloadedSeries(seriesList);
+
+        if (nextTask && !isDownloadingRef.current) {
+          runDownloadPipeline(nextTask);
+        }
+      });
+
+    return () => unsub();
+  }, [user]);
+
+  // 2. Download Execution Engine
+  const runDownloadPipeline = async (ep) => {
+    isDownloadingRef.current = true;
+    setActiveDownload(ep);
+    setDownloadProgress(0);
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    const folderName = `${ep.seriesId}_ep${ep.episodeNum}`;
+    const epRef = firestore()
+      .collection('users')
+      .doc(user.uid)
+      .collection('downloads')
+      .doc(ep.seriesId)
+      .collection('episodes')
+      .doc(ep.epDocId);
+
+    await epRef.set({ status: 'downloading', targetFolder: folderName }, { merge: true });
+
+    try {
+      // Resolve payload: use embedded payload or fetch from your scraper endpoint
+      let apiPayload = ep.apiData;
+      if (!apiPayload && ep.streamApiUrl) {
+        const res = await fetch(ep.streamApiUrl, { signal: abortController.signal });
+        const json = await res.json();
+        if (json.success && json.data) {
+          apiPayload = json.data;
+        }
+      }
+
+      // Fallback fallback construction if only raw m3u8 and referer were stored
+      if (!apiPayload) {
+        apiPayload = {
+          m3u8: ep.videoUrl,
+          referer: ep.referer || 'https://megaplay.buzz/',
+          subtitles: ep.subtitles || [],
+          intro: ep.intro || { start: 0, end: 0 },
+          outro: ep.outro || { start: 0, end: 0 }
+        };
+      }
+
+      const result = await downloadEpisodeBundle({
+        apiData: apiPayload,
+        targetFolder: folderName,
+        onProgress: (pct) => setDownloadProgress(pct),
+        abortController: abortController
+      });
+
+      if (result.success) {
+        await epRef.set({
+          status: 'completed',
+          localUri: result.localM3u8Uri,
+          localMetaUri: result.localMetaUri,
+          targetFolder: folderName,
+          downloadedAt: Date.now()
+        }, { merge: true });
+
+        // Update User Taste Profile Collection
+        await firestore()
+          .collection('users')
+          .doc(user.uid)
+          .collection('taste')
+          .doc(ep.seriesId)
+          .set({
+            animeId: ep.seriesId,
+            title: ep.seriesTitle,
+            posterUrl: ep.posterUrl || '',
+            lastDownloadedQuality: ep.chosenQuality || 'Auto',
+            addedAt: firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+
+        if (expandedSeriesId === ep.seriesId) {
+          loadSeriesEpisodes(ep.seriesId);
+        }
+      }
+    } catch (err) {
+      if (err.message.includes('Canceled') || abortController.signal.aborted) {
+        await deleteEpisodeFolder(folderName);
+        await epRef.delete();
+      } else {
+        await epRef.set({ status: 'failed', errorMessage: err.message }, { merge: true });
+        Alert.alert('Download Error', `Episode ${ep.episodeNum} failed: ${err.message}`);
+      }
+    } finally {
+      isDownloadingRef.current = false;
+      setActiveDownload(null);
+      setDownloadProgress(0);
+      abortControllerRef.current = null;
+    }
   };
+
+  const cancelActiveDownload = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  };
+
+  // 3. Series Drawer & Delete Actions
+  const loadSeriesEpisodes = async (seriesId) => {
+    if (expandedSeriesId === seriesId) {
+      setExpandedSeriesId(null);
+      setSeriesEpisodes([]);
+      return;
+    }
+
+    setExpandedSeriesId(seriesId);
+    setLoadingEpisodes(true);
+
+    try {
+      const snap = await firestore()
+        .collection('users')
+        .doc(user.uid)
+        .collection('downloads')
+        .doc(seriesId)
+        .collection('episodes')
+        .where('status', '==', 'completed')
+        .get();
+
+      const eps = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      eps.sort((a, b) => a.episodeNum - b.episodeNum);
+      setSeriesEpisodes(eps);
+    } catch (e) {
+      setSeriesEpisodes([]);
+    } finally {
+      setLoadingEpisodes(false);
+    }
+  };
+
+  const deleteDownloadedEpisode = async (seriesId, ep) => {
+    Alert.alert(
+      'Delete Episode',
+      `Delete Episode ${ep.episodeNum} and all its cached segments?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Delete', 
+          style: 'destructive', 
+          onPress: async () => {
+            try {
+              if (ep.targetFolder) {
+                await deleteEpisodeFolder(ep.targetFolder);
+              }
+              await firestore()
+                .collection('users')
+                .doc(user.uid)
+                .collection('downloads')
+                .doc(seriesId)
+                .collection('episodes')
+                .doc(ep.id)
+                .delete();
+
+              setSeriesEpisodes(prev => prev.filter(item => item.id !== ep.id));
+            } catch (err) {
+              Alert.alert('Error', 'Failed to delete files.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const playOfflineVideo = (ep) => {
+    navigation.navigate('Player', {
+      activeUrl: ep.localUri,
+      localMetaUri: ep.localMetaUri,
+      animeTitle: ep.seriesTitle || 'Offline Video',
+      episodeNum: ep.episodeNum,
+      episodeTitle: ep.episodeTitle,
+      animeId: ep.seriesId,
+      slug: ep.episodeSlug,
+      userUid: user?.uid,
+      targetType: ep.type || 'sub'
+    });
+  };
+
+  return (
+    <View style={styles.container}>
+      <StatusBar hidden={true} />
+
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={onBack || (() => navigation?.goBack?.())}>
+          <IconBack />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Downloads</Text>
+      </View>
+
+      <FlatList
+        data={downloadedSeries}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listPadding}
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={
+          <>
+            {activeDownload && (
+              <View style={styles.activeDownloadSection}>
+                <Text style={styles.sectionHeader}>DOWNLOADING NOW</Text>
+                <View style={styles.activeCard}>
+                  <ProxyImage 
+                    source={{ uri: activeDownload.posterUrl }} 
+                    style={styles.activePoster} 
+                    resizeMode="cover" 
+                  />
+
+                  <View style={styles.activeDetails}>
+                    <Text style={styles.activeSeriesTitle} numberOfLines={1}>
+                      {activeDownload.seriesTitle}
+                    </Text>
+                    <Text style={styles.activeEpTitle} numberOfLines={1}>
+                      Episode {activeDownload.episodeNum} • {activeDownload.episodeTitle || 'HLS Stream'}
+                    </Text>
+
+                    <View style={styles.statsRow}>
+                      <Text style={styles.statsPercentage}>{downloadProgress}%</Text>
+                      <Text style={styles.statsMeta}>
+                        {activeDownload.chosenQuality || 'Auto'} • {activeDownload.type?.toUpperCase() || 'SUB'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.progressBarTrack}>
+                      <View style={[styles.progressBarFill, { width: `${downloadProgress}%` }]} />
+                    </View>
+
+                    <TouchableOpacity 
+                      style={styles.cancelDownloadBtn} 
+                      onPress={cancelActiveDownload}
+                      activeOpacity={0.7}
+                    >
+                      <IconCancel />
+                      <Text style={styles.cancelBtnText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            )}
+
+            {downloadedSeries.length > 0 && (
+              <Text style={styles.sectionHeader}>DOWNLOADED SERIES</Text>
+            )}
+          </>
+        }
+        renderItem={({ item }) => (
+          <View style={styles.seriesContainer}>
+            <TouchableOpacity 
+              style={styles.seriesCard} 
+              activeOpacity={0.8}
+              onPress={() => loadSeriesEpisodes(item.id)}
+            >
+              <ProxyImage 
+                source={{ uri: item.posterUrl }} 
+                style={styles.seriesPoster} 
+                resizeMode="cover" 
+              />
+              <View style={styles.seriesInfo}>
+                <Text style={styles.seriesTitle} numberOfLines={1}>{item.seriesTitle}</Text>
+                <Text style={styles.seriesSubtitle}>Tap to view offline episodes</Text>
+              </View>
+              <View style={[
+                styles.arrowIcon, 
+                expandedSeriesId === item.id && styles.arrowIconRotated
+              ]}>
+                <IconChevronDown color="rgba(255,255,255,0.6)" />
+              </View>
+            </TouchableOpacity>
+
+            {expandedSeriesId === item.id && (
+              <View style={styles.episodesDrawer}>
+                {loadingEpisodes ? (
+                  <ActivityIndicator size="small" color={BRAND_RED} style={{ padding: 16 }} />
+                ) : seriesEpisodes.length === 0 ? (
+                  <Text style={styles.emptyDrawerText}>No finished downloads in this series.</Text>
+                ) : (
+                  seriesEpisodes.map((ep) => (
+                    <View key={ep.id} style={styles.episodeRow}>
+                      <View style={styles.epLeftGroup}>
+                        <Text style={styles.epBulletNumber}>•{ep.episodeNum}</Text>
+                        <View style={{ flex: 1, paddingRight: 8 }}>
+                          <Text style={styles.epTitle} numberOfLines={1}>
+                            {ep.episodeTitle || `Episode ${ep.episodeNum}`}
+                          </Text>
+                          <Text style={styles.epMetaPills}>
+                            {ep.chosenQuality || 'Auto'} • {ep.type?.toUpperCase() || 'SUB'}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.epActionRow}>
+                        <TouchableOpacity 
+                          style={styles.epPlayBtn} 
+                          onPress={() => playOfflineVideo(ep)}
+                          activeOpacity={0.8}
+                        >
+                          <IconPlay color="#000" size={12} />
+                          <Text style={styles.epPlayText}>Play</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity 
+                          style={styles.epTrashBtn} 
+                          onPress={() => deleteDownloadedEpisode(item.id, ep)}
+                          activeOpacity={0.7}
+                        >
+                          <IconTrash />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
+          </View>
+        )}
+        ListEmptyComponent={!activeDownload && (
+          <View style={styles.emptyScreenContainer}>
+            <Text style={styles.emptyScreenText}>No offline downloads available.</Text>
+          </View>
+        )}
+      />
+    </View>
+  );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#000000' },
+  header: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingTop: 36, 
+    paddingBottom: 16, 
+    paddingHorizontal: 16, 
+    backgroundColor: '#0A0A0A', 
+    borderBottomWidth: 1, 
+    borderBottomColor: 'rgba(255,255,255,0.08)' 
+  },
+  backBtn: { 
+    width: 38, 
+    height: 38, 
+    borderRadius: 19, 
+    backgroundColor: 'rgba(255,255,255,0.08)', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    marginRight: 14 
+  },
+  headerTitle: { color: '#FFF', fontSize: 20, fontWeight: '900', letterSpacing: 0.5 },
+  listPadding: { paddingHorizontal: 16, paddingBottom: 60, paddingTop: 16 },
+  sectionHeader: { 
+    color: 'rgba(255,255,255,0.4)', 
+    fontSize: 11, 
+    fontWeight: '800', 
+    letterSpacing: 1, 
+    marginBottom: 12, 
+    marginTop: 8 
+  },
+  activeDownloadSection: { marginBottom: 20 },
+  activeCard: { 
+    flexDirection: 'row', 
+    backgroundColor: '#111111', 
+    borderRadius: 12, 
+    padding: 12, 
+    borderWidth: 1, 
+    borderColor: 'rgba(255,255,255,0.1)' 
+  },
+  activePoster: { width: 80, height: 110, borderRadius: 8, backgroundColor: '#1A1A1A' },
+  activeDetails: { flex: 1, marginLeft: 14, justifyContent: 'center' },
+  activeSeriesTitle: { color: '#FFF', fontSize: 15, fontWeight: '800', marginBottom: 3 },
+  activeEpTitle: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600', marginBottom: 10 },
+  statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  statsPercentage: { color: BRAND_ACCENT, fontSize: 12, fontWeight: '900' },
+  statsMeta: { color: 'rgba(255,255,255,0.4)', fontSize: 11, fontWeight: '700' },
+  progressBarTrack: { 
+    width: '100%', 
+    height: 5, 
+    backgroundColor: 'rgba(255,255,255,0.1)', 
+    borderRadius: 3, 
+    overflow: 'hidden', 
+    marginBottom: 10 
+  },
+  progressBarFill: { height: '100%', backgroundColor: BRAND_ACCENT },
+  cancelDownloadBtn: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    alignSelf: 'flex-start', 
+    backgroundColor: 'rgba(239,68,68,0.2)', 
+    borderWidth: 1, 
+    borderColor: 'rgba(239,68,68,0.4)', 
+    borderRadius: 6, 
+    paddingHorizontal: 10, 
+    paddingVertical: 4, 
+    gap: 4 
+  },
+  cancelBtnText: { color: '#EF4444', fontSize: 11, fontWeight: '800' },
+  seriesContainer: { marginBottom: 10 },
+  seriesCard: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: '#0D0D0D', 
+    borderRadius: 10, 
+    padding: 10, 
+    borderWidth: 1, 
+    borderColor: 'rgba(255,255,255,0.06)' 
+  },
+  seriesPoster: { width: 48, height: 68, borderRadius: 6, backgroundColor: '#1E1E1E' },
+  seriesInfo: { flex: 1, marginLeft: 12 },
+  seriesTitle: { color: '#FFF', fontSize: 15, fontWeight: '800', marginBottom: 4 },
+  seriesSubtitle: { color: 'rgba(255,255,255,0.4)', fontSize: 12, fontWeight: '500' },
+  arrowIcon: { padding: 8 },
+  arrowIconRotated: { transform: [{ rotate: '180deg' }] },
+  episodesDrawer: { 
+    backgroundColor: '#080808', 
+    borderBottomLeftRadius: 10, 
+    borderBottomRightRadius: 10, 
+    paddingHorizontal: 12, 
+    paddingVertical: 6, 
+    borderWidth: 1, 
+    borderTopWidth: 0, 
+    borderColor: 'rgba(255,255,255,0.06)' 
+  },
+  emptyDrawerText: { color: 'rgba(255,255,255,0.4)', fontSize: 12, textAlign: 'center', marginVertical: 10 },
+  episodeRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between', 
+    paddingVertical: 10, 
+    borderBottomWidth: 1, 
+    borderBottomColor: 'rgba(255,255,255,0.04)' 
+  },
+  epLeftGroup: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  epBulletNumber: { color: 'rgba(255,255,255,0.4)', fontSize: 14, fontWeight: '800', width: 28 },
+  epTitle: { color: '#FFF', fontSize: 13, fontWeight: '700', marginBottom: 2 },
+  epMetaPills: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: '700' },
+  epActionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  epPlayBtn: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: '#FFF', 
+    borderRadius: 4, 
+    paddingHorizontal: 10, 
+    paddingVertical: 6, 
+    gap: 4 
+  },
+  epPlayText: { color: '#000', fontSize: 11, fontWeight: '800' },
+  epTrashBtn: { padding: 6, backgroundColor: 'rgba(239,68,68,0.1)', borderRadius: 4 },
+  emptyScreenContainer: { paddingVertical: 60, alignItems: 'center' },
+  emptyScreenText: { color: 'rgba(255,255,255,0.4)', fontSize: 14, fontWeight: '600' }
+});
