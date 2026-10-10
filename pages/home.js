@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, Image, StatusBar } from 'react-native';
 import Svg, { Defs, LinearGradient, Stop, Rect, Path, Circle } from 'react-native-svg';
 
 import Carousel from './home/carousel';
@@ -8,8 +8,8 @@ import TrendingSlider from './home/trending_slider';
 import Play from '../pages/play';
 import ProfileSettings from './profile'; 
 import Search from '../components/search'; 
-import Downloads from '../pages/downloads'; // Added Downloads Import
-import BottomNav from './home/bottomnav'; // Imported new modular BottomNav
+import Downloads from '../pages/downloads'; 
+import BottomNav from './home/bottomnav'; 
 
 const AVATARS = {
   'pfp1.jpg': require('../assets/pfp1.jpg'),
@@ -56,11 +56,13 @@ export default function Home({ user, activeProfile, onSwitchProfile, navigation 
   const [activeTab, setActiveTab] = useState('Home');
   const [selectedAnime, setSelectedAnime] = useState(null);
 
-  // Hidden overlay detection includes the new Downloads tab
+  // Hidden overlay detection includes the Downloads tab
   const isOverlayActive = selectedAnime !== null || activeTab === 'Search' || activeTab === 'Settings' || activeTab === 'Downloads';
 
   return (
     <View style={styles.masterContainer}>
+      {/* 1. Hides the top notification bar globally for this screen */}
+      <StatusBar hidden={true} />
 
       {/* HOME SCREEN LAYER */}
       <View style={[styles.container, isOverlayActive && { display: 'none' }]}>
@@ -80,13 +82,13 @@ export default function Home({ user, activeProfile, onSwitchProfile, navigation 
           <View style={{ height: 40 }} />
         </ScrollView>
 
-        {/* FLOATING HEADER */}
+        {/* 2. FLOATING HEADER WITH ENHANCED GRADIENT */}
         <View style={styles.floatingHeader} pointerEvents="box-none">
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
               <LinearGradient id="headerGrad" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor="#000000" stopOpacity="0.85" />
-                <Stop offset="0.6" stopColor="#000000" stopOpacity="0.4" />
+                <Stop offset="0" stopColor="#000000" stopOpacity="0.95" />
+                <Stop offset="0.4" stopColor="#000000" stopOpacity="0.7" />
                 <Stop offset="1" stopColor="#000000" stopOpacity="0" />
               </LinearGradient>
             </Defs>
@@ -141,7 +143,7 @@ export default function Home({ user, activeProfile, onSwitchProfile, navigation 
         </View>
       )}
 
-      {/* NEW: Downloads Overlay Screen */}
+      {/* Downloads Overlay Screen */}
       {activeTab === 'Downloads' && (
         <View style={styles.overlayScreen}>
           <Downloads 
@@ -169,18 +171,19 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000000' },
   overlayScreen: { ...StyleSheet.absoluteFillObject, backgroundColor: '#000000', zIndex: 50 },
 
+  // 3. Header Styling Updates
   floatingHeader: { 
     position: 'absolute',
     top: 0, left: 0, right: 0,
-    height: 100,
+    height: 130, // Increased height to accommodate the downward shift and longer gradient
     zIndex: 100,
   },
   headerContent: {
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     alignItems: 'center', 
-    paddingHorizontal: 16, 
-    paddingTop: 15,
+    paddingHorizontal: 20, 
+    paddingTop: 40, // Moved header down
   },
   headerLogoImage: { 
     width: 175, 
