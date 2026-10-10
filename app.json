@@ -6,6 +6,10 @@
     "orientation": "default",
     "icon": "./assets/Kameko_logo.png",
     "userInterfaceStyle": "dark",
+    "backgroundColor": "#000000",
+    "splash": {
+      "backgroundColor": "#000000"
+    },
     "androidStatusBar": {
       "hidden": true,
       "translucent": true
@@ -44,7 +48,7 @@
         {
           "android": {
             "minSdkVersion": 24,
-            "enableProguardInReleaseBuilds": true,
+            "enableProguardInReleaseBuilds": false,
             "multiDexEnabled": true,
             "packagingOptions": {
               "pickFirst": [
