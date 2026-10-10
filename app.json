@@ -35,7 +35,6 @@
       "@react-native-firebase/app",
       "@react-native-firebase/auth",
       "@react-native-google-signin/google-signin",
-      "./withFFmpeg.js",
       [
         "expo-notifications",
         {
@@ -49,13 +48,7 @@
           "android": {
             "minSdkVersion": 24,
             "enableProguardInReleaseBuilds": true,
-            "multiDexEnabled": true,
-            "packagingOptions": {
-              "pickFirst": [
-                "**/libc++_shared.so",
-                "**/libffmpegkit.so"
-              ]
-            }
+            "multiDexEnabled": true
           }
         }
       ]
