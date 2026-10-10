@@ -12,7 +12,10 @@ import Login from './pages/login';
 import Profiles from './pages/profile'; 
 import Home from './pages/home';
 
-// 1. Configure foreground notification behavior
+// --- NEW NATIVE NOTIFEE ENGINE ---
+import { registerNotificationListener } from './components/NotificationEngine';
+
+// 1. Configure foreground notification behavior (Expo FCM)
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -21,10 +24,13 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// 2. Headless background handler (must run outside the component tree)
+// 2. Headless background handler for Firebase Push Messages
 messaging().setBackgroundMessageHandler(async remoteMessage => {
   console.log('FCM Message handled in background:', remoteMessage);
 });
+
+// 3. Register the Notifee background listener for Download Cancel buttons BEFORE App mounts
+registerNotificationListener();
 
 export default function App() {
   const [initializing, setInitializing] = useState(true);
