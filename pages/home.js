@@ -7,9 +7,9 @@ import RecentSlider from './home/recent_slider';
 import TrendingSlider from './home/trending_slider';
 import Play from '../pages/play';
 import ProfileSettings from './profile'; 
-
-// Import the new Search Component
 import Search from '../components/search'; 
+import Downloads from '../pages/downloads'; // Added Downloads Import
+import BottomNav from './home/bottomnav'; // Imported new modular BottomNav
 
 const AVATARS = {
   'pfp1.jpg': require('../assets/pfp1.jpg'),
@@ -20,7 +20,6 @@ const AVATARS = {
   'pfp6.jpg': require('../assets/pfp6.jpg'),
 };
 
-// Premium SVG Search Icon
 const IconSearch = ({ size = 26, color = "#FFF" }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <Circle cx="11" cy="11" r="8" />
@@ -53,34 +52,18 @@ const HorizontalRow = ({ title }) => (
   </View>
 );
 
-// Added navigation to the props
 export default function Home({ user, activeProfile, onSwitchProfile, navigation }) {
   const [activeTab, setActiveTab] = useState('Home');
   const [selectedAnime, setSelectedAnime] = useState(null);
 
-  const renderBottomNav = () => (
-    <View style={styles.bottomNav}>
-      {['Home', 'Search', 'My List', 'Settings'].map((tab, idx) => (
-        <TouchableOpacity key={idx} style={styles.navItem} onPress={() => setActiveTab(tab)}>
-          <Text style={[styles.navText, activeTab === tab && styles.navTextActive]}>{tab}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-
-  // Determine if we should hide the home screen to keep it in memory
-  const isOverlayActive = selectedAnime !== null || activeTab === 'Search' || activeTab === 'Settings';
+  // Hidden overlay detection includes the new Downloads tab
+  const isOverlayActive = selectedAnime !== null || activeTab === 'Search' || activeTab === 'Settings' || activeTab === 'Downloads';
 
   return (
     <View style={styles.masterContainer}>
-      
-      {/* 
-        HOME SCREEN LAYER
-        Using display: 'none' guarantees that Carousel/Sliders NEVER unmount.
-        When you go back, no scripts reload. It is instantly exactly as you left it.
-      */}
+
+      {/* HOME SCREEN LAYER */}
       <View style={[styles.container, isOverlayActive && { display: 'none' }]}>
-        
         <ScrollView 
           showsVerticalScrollIndicator={false} 
           style={styles.scroll}
@@ -94,14 +77,11 @@ export default function Home({ user, activeProfile, onSwitchProfile, navigation 
           <View style={styles.contentPadding}>
             <HorizontalRow title={`Continue Watching for ${activeProfile?.name || 'You'}`} />
           </View>
-          
           <View style={{ height: 40 }} />
         </ScrollView>
 
-        {/* FLOATING HEADER: Pushed to the top, larger logo, with gradient background */}
+        {/* FLOATING HEADER */}
         <View style={styles.floatingHeader} pointerEvents="box-none">
-          
-          {/* Gradient Backdrop to make icons/logo pop against light anime images */}
           <Svg height="100%" width="100%" style={StyleSheet.absoluteFillObject} pointerEvents="none">
             <Defs>
               <LinearGradient id="headerGrad" x1="0" y1="0" x2="0" y2="1">
@@ -114,13 +94,12 @@ export default function Home({ user, activeProfile, onSwitchProfile, navigation 
           </Svg>
 
           <View style={styles.headerContent}>
-            {/* BIGGER HEADER LOGO */}
             <Image 
               source={require('../assets/kameko_header.png')} 
               style={styles.headerLogoImage}
               resizeMode="contain"
             />
-            
+
             <View style={styles.headerActions}>
               <TouchableOpacity onPress={() => setActiveTab('Search')} activeOpacity={0.7} style={styles.searchBtn}>
                 <IconSearch />
@@ -136,18 +115,18 @@ export default function Home({ user, activeProfile, onSwitchProfile, navigation 
           </View>
         </View>
 
-        {renderBottomNav()}
+        {/* Render Modular BottomNav */}
+        <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} />
       </View>
 
       {/* --- OVERLAY SCREENS --- */}
-      {/* These render perfectly over the hidden Home screen without destroying its cache */}
       
       {selectedAnime && (
         <Play 
           anime={selectedAnime} 
           user={user} 
           onBack={() => setSelectedAnime(null)} 
-          navigation={navigation} /* <--- Added navigation prop here */
+          navigation={navigation}
         />
       )}
 
@@ -158,14 +137,26 @@ export default function Home({ user, activeProfile, onSwitchProfile, navigation 
             onBack={() => setActiveTab('Home')} 
             onSelectAnime={(anime) => setSelectedAnime(anime)} 
           />
-          {renderBottomNav()}
+          <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} />
+        </View>
+      )}
+
+      {/* NEW: Downloads Overlay Screen */}
+      {activeTab === 'Downloads' && (
+        <View style={styles.overlayScreen}>
+          <Downloads 
+            user={user} 
+            navigation={navigation} 
+            onBack={() => setActiveTab('Home')} 
+          />
+          <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} />
         </View>
       )}
 
       {activeTab === 'Settings' && (
         <View style={styles.overlayScreen}>
           <ProfileSettings user={user} setLoggedInUser={() => {}} onHardwareBack={() => setActiveTab('Home')} /> 
-          {renderBottomNav()}
+          <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} />
         </View>
       )}
 
@@ -177,11 +168,11 @@ const styles = StyleSheet.create({
   masterContainer: { flex: 1, backgroundColor: '#000000' },
   container: { flex: 1, backgroundColor: '#000000' },
   overlayScreen: { ...StyleSheet.absoluteFillObject, backgroundColor: '#000000', zIndex: 50 },
-  
+
   floatingHeader: { 
     position: 'absolute',
     top: 0, left: 0, right: 0,
-    height: 100, // Enough height for the gradient to fade smoothly
+    height: 100,
     zIndex: 100,
   },
   headerContent: {
@@ -189,11 +180,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between', 
     alignItems: 'center', 
     paddingHorizontal: 16, 
-    paddingTop: 15, // MOVED SIGNIFICANTLY HIGHER
+    paddingTop: 15,
   },
   headerLogoImage: { 
-    width: 175, // INCREASED SIZE
-    height: 48, // INCREASED SIZE
+    width: 175, 
+    height: 48, 
     tintColor: '#E50914'
   },
   headerActions: {
@@ -217,7 +208,7 @@ const styles = StyleSheet.create({
     elevation: 5
   },
   headerAvatar: { width: 38, height: 38, borderRadius: 5 },
-  
+
   scroll: { flex: 1 },
   contentPadding: { paddingTop: 10 },
   rowContainer: { marginBottom: 25 },
@@ -229,13 +220,5 @@ const styles = StyleSheet.create({
     width: 140, height: 210, backgroundColor: '#1A1A1A', marginRight: 15, borderRadius: 8, 
     justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)'
   },
-  cardText: { color: '#555555' },
-  
-  bottomNav: { 
-    flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', height: 65, 
-    backgroundColor: '#0a0a0a', borderTopWidth: 1, borderTopColor: '#222222', paddingBottom: 10 
-  },
-  navItem: { alignItems: 'center', padding: 10 },
-  navText: { color: '#888888', fontSize: 12, marginTop: 4, fontWeight: '600' },
-  navTextActive: { color: '#E50914', fontWeight: 'bold' }
+  cardText: { color: '#555555' }
 });
