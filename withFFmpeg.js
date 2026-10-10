@@ -2,12 +2,20 @@ const { withProjectBuildGradle } = require('@expo/config-plugins');
 
 module.exports = function withFFmpeg(config) {
   return withProjectBuildGradle(config, (config) => {
-    // Inject the correct Maven Central version into Android's build.gradle
-    if (!config.modResults.contents.includes('ffmpegKitVersion')) {
-      config.modResults.contents = config.modResults.contents.replace(
-        /ext\s*\{/,
-        `ext {\n        ffmpegKitPackage = "https"\n        ffmpegKitVersion = "6.0"\n`
-      );
+    // Intercept the dead 'com.arthenica' request and route it to the live community fork
+    const resolutionPatch = `
+allprojects {
+    configurations.all {
+        resolutionStrategy.eachDependency { details ->
+            if (details.requested.group == 'com.arthenica' && details.requested.name.startsWith('ffmpeg-kit-')) {
+                details.useTarget(group: 'dev.ffmpegkit-maintained', name: details.requested.name, version: '6.0.3')
+            }
+        }
+    }
+}
+`;
+    if (!config.modResults.contents.includes('dev.ffmpegkit-maintained')) {
+      config.modResults.contents += resolutionPatch;
     }
     return config;
   });
