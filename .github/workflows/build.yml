@@ -60,8 +60,4 @@ jobs:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=1024m"
         run: ./gradlew clean assembleRelease -Pandroid.injected.signing.store.file=$HOME/.android/debug.keystore -Pandroid.injected.signing.store.password=android -Pandroid.injected.signing.key.alias=androiddebugkey -Pandroid.injected.signing.key.password=android --stacktrace
 
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: kameko-installable-app
-          path: android/app/build/outputs/apk/**/*.apk
+    
