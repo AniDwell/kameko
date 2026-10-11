@@ -1,4 +1,4 @@
-name: Build Kameko APK
+Name: Build Kameko APK
 
 on:
   push:
@@ -20,6 +20,7 @@ jobs:
         with:
           node-version: '18'
 
+      # GITHUB ACTIONS AUTOMATICALLY INSTALLS ALL REQUIRED PACKAGES HERE
       - name: Install dependencies
         run: |
           npm install
@@ -58,9 +59,8 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=4096"
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=1024m"
         run: ./gradlew clean assembleRelease -Pandroid.injected.signing.store.file=$HOME/.android/debug.keystore -Pandroid.injected.signing.store.password=android -Pandroid.injected.signing.key.alias=androiddebugkey -Pandroid.injected.signing.key.password=android --stacktrace
-
-      - name: Upload Release APK
-        uses: actions/upload-artifact@v4
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v3
         with:
-          name: kameko-release-apk
+          name: release-apk
           path: android/app/build/outputs/apk/release/app-release.apk
